@@ -1,0 +1,6 @@
+{
+  "/forecasting/page": "app/forecasting/page.js",
+  "/dashboard/page": "app/dashboard/page.js",
+  "/employee-performance/page": "app/employee-performance/page.js",
+  "/item-trends/page": "app/item-trends/page.js"
+}
