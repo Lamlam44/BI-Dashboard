@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 from typing import Tuple, Optional
 import logging
-from config import FACT_SALES_PATH, DIM_PRODUCT_PATH, DIM_DATE_PATH
+from df_config import FACT_SALES_PATH, DIM_PRODUCT_PATH, DIM_DATE_PATH
 
 logger = logging.getLogger(__name__)
 

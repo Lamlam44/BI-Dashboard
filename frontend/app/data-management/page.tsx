@@ -1,83 +1,279 @@
+'use client';
+
+import React, { useState, useEffect } from 'react';
 import DashboardLayout from '../components/DashboardLayout';
+import { Upload, Download, Trash2, Database, AlertCircle, RefreshCw, Eye } from 'lucide-react';
 
-const DataManagement = () => {
-  return (
-    <DashboardLayout>
-      <div className="space-y-8">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-900">
-            Data Management
-          </h1>
-          <p className="text-slate-600 mt-2">
-            Manage data sources, quality, and integration
-          </p>
-        </div>
+const API_BASE = "http://localhost:8001";
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {[
-            {
-              title: 'Data Sources',
-              value: '12',
-              subtitle: 'Connected systems',
-            },
-            {
-              title: 'Data Quality',
-              value: '98.5%',
-              subtitle: 'Overall completeness',
-            },
-            {
-              title: 'Last Sync',
-              value: '2 mins ago',
-              subtitle: 'Real-time updates',
-            },
-          ].map((card, idx) => (
-            <div
-              key={idx}
-              className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm hover:shadow-md transition-shadow"
-            >
-              <p className="text-slate-600 text-sm font-medium">{card.title}</p>
-              <p className="text-2xl font-bold text-slate-900 mt-2">
-                {card.value}
-              </p>
-              <p className="text-slate-500 text-sm mt-3">{card.subtitle}</p>
+export default function DataManagementPage() {
+    const [schemas, setSchemas] = useState<any>({});
+    const [selectedTable, setSelectedTable] = useState<string>('');
+    const [categories, setCategories] = useState<string[]>([]);
+    
+    // Purge states
+    const [startDate, setStartDate] = useState('');
+    const [endDate, setEndDate] = useState('');
+    const [selectedCategory, setSelectedCategory] = useState('');
+
+    useEffect(() => {
+        fetch(`${API_BASE}/schema`)
+            .then(res => res.json())
+            .then(data => {
+                setSchemas(data);
+                if (Object.keys(data).length > 0) {
+                    setSelectedTable(Object.keys(data)[0]);
+                }
+            })
+            .catch(err => console.error("Error loading schemas:", err));
+    }, []);
+
+    useEffect(() => {
+        if (selectedTable && schemas[selectedTable]?.deletion_strategy === 'CATEGORY') {
+            fetch(`${API_BASE}/categories/${selectedTable}`)
+                .then(res => res.json())
+                .then(data => setCategories(data))
+                .catch(err => console.error(err));
+        }
+    }, [selectedTable, schemas]);
+
+    const handleDownloadTemplate = () => {
+        window.open(`${API_BASE}/template/${selectedTable}`);
+    };
+
+    const handleUpdateTableMeta = (field: string, value: string) => {
+        setSchemas((prev: any) => ({
+            ...prev,
+            [selectedTable]: { ...prev[selectedTable], [field]: value }
+        }));
+    };
+
+    const handleUpdateColumnMeta = (colIndex: number, field: string, value: any) => {
+        setSchemas((prev: any) => {
+            const updatedTable = { ...prev[selectedTable] };
+            const updatedCols = [...updatedTable.columns];
+            updatedCols[colIndex] = { ...updatedCols[colIndex], [field]: value };
+            updatedTable.columns = updatedCols;
+            return {
+                ...prev,
+                [selectedTable]: updatedTable
+            };
+        });
+    };
+
+    const handleSaveSchema = async () => {
+        try {
+            const res = await fetch(`${API_BASE}/schema`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(schemas)
+            });
+            if (res.ok) {
+                alert('✅ Đã lưu cấu hình Schema thành công!');
+            } else {
+                alert('Lỗi lưu cấu hình.');
+            }
+        } catch(e) {
+            alert('Lỗi gọi API lưu cấu hình.');
+        }
+    };
+
+    const handlePurge = async () => {
+        if (!confirm(`CẢNH BÁO: Rủi ro xóa dữ liệu trên bảng ${selectedTable}! Bạn có chắc chắn thực hiện? Hành động này sẽ tự động được Backup.`)) return;
+        
+        try {
+            const res = await fetch(`${API_BASE}/purge`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    table_name: selectedTable,
+                    start_date: startDate || undefined,
+                    end_date: endDate || undefined,
+                    category: selectedCategory || undefined
+                })
+            });
+            const result = await res.json();
+            alert(`✅ Xóa thành công!\nSố dòng đã xóa: ${result.deleted_rows}\nSố dòng còn lại: ${result.remaining_rows}`);
+        } catch(e) {
+            alert('Lỗi! Vui lòng kiểm tra lại Backup.');
+        }
+    };
+
+    const currentSchema = schemas[selectedTable];
+
+    return (
+        <DashboardLayout>
+            <div className="p-8 space-y-8 bg-slate-50 min-h-screen">
+                <div className="flex items-center justify-between">
+                <h1 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+                    <Database className="text-indigo-600" /> Cổng Quản Lý Dữ Liệu Data Warehouse
+                </h1>
             </div>
-          ))}
-        </div>
 
-        <div className="bg-white rounded-lg border border-slate-200 p-8 shadow-sm">
-          <h2 className="text-lg font-bold text-slate-900 mb-6">
-            Data Source Status
-          </h2>
-          <div className="space-y-4">
-            {[
-              { name: 'Sales Database', status: 'Connected', lastSync: '2 mins' },
-              { name: 'Inventory System', status: 'Connected', lastSync: '5 mins' },
-              { name: 'Employee Records', status: 'Connected', lastSync: '10 mins' },
-              { name: 'Weather API', status: 'Connected', lastSync: '1 hour' },
-            ].map((source, idx) => (
-              <div
-                key={idx}
-                className="flex items-center justify-between p-4 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-3 h-3 bg-green-500 rounded-full" />
-                  <div>
-                    <p className="font-medium text-slate-900">{source.name}</p>
-                    <p className="text-sm text-slate-500">
-                      Last sync: {source.lastSync}
-                    </p>
-                  </div>
+            {/* BẢNG ĐIỀU KHIỂN CHỌN BẢNG */}
+            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex items-end gap-4">
+                <div className="flex-1">
+                    <label className="block text-sm font-semibold text-slate-700 mb-2">Chọn Bảng Dữ Liệu (Table)</label>
+                    <select 
+                        value={selectedTable}
+                        onChange={(e) => setSelectedTable(e.target.value)}
+                        className="w-full px-4 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none"
+                    >
+                        {Object.entries(schemas).map(([key, val]: any) => (
+                            <option key={key} value={key}>{val.display_name} ({key})</option>
+                        ))}
+                    </select>
                 </div>
-                <span className="text-green-700 font-medium text-sm">
-                  {source.status}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </DashboardLayout>
-  );
-};
+                <button onClick={handleDownloadTemplate} className="flex items-center gap-2 px-6 py-2 bg-slate-800 text-white font-medium rounded-lg hover:bg-slate-900 transition-colors">
+                    <Download size={18} /> Tải file Template
+                </button>
+            </div>
 
-export default DataManagement;
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                
+                {/* VÙNG UPLOAD (Ingestion) */}
+                <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                    <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+                        <Upload className="text-blue-500" /> Nạp Dữ Liệu (Append & Deduplicate)
+                    </h2>
+                    <p className="text-sm text-slate-500 mb-6">File Excel Upload sẽ được tự độ gộp với file gốc. Các Record trùng lặp (Primary Key) sẽ giữ bản mới nhất.</p>
+                    
+                    <div className="border-2 border-dashed border-slate-300 rounded-xl p-10 flex flex-col items-center justify-center bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer relative">
+                        <input type="file" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" accept=".csv, .xlsx" />
+                        <Upload size={40} className="text-slate-400 mb-3" />
+                        <span className="text-slate-600 font-medium">Kéo thả file CSV/XLSX vào đây hoặc click để chọn</span>
+                        <span className="text-slate-400 text-sm mt-1">Dữ liệu sẽ tự động kiểm tra mô hình Schema</span>
+                    </div>
+                </div>
+
+                {/* VÙNG XÓA DỮ LIỆU THÔNG MINH (Purge) */}
+                <div className="bg-white p-6 rounded-xl border border-red-100 shadow-sm relative overflow-hidden">
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-red-50 rounded-bl-full -z-0"></div>
+                    <h2 className="text-lg font-bold text-red-700 mb-4 flex items-center gap-2 relative z-10">
+                        <Trash2 /> Xóa Dữ Liệu (Smart Purge)
+                    </h2>
+                    <div className="text-sm text-slate-600 mb-6 relative z-10 p-3 bg-red-50 border border-red-100 rounded-lg flex gap-3">
+                        <AlertCircle className="text-red-500 flex-shrink-0" size={20} />
+                        <div>Dữ liệu sẽ được <b>Backup</b> sang <code className="bg-red-100 px-1 rounded text-red-800">/backups</code> trước khi purge. Cấu hình bảo vệ: Xóa theo chế độ <b>{currentSchema?.deletion_strategy}</b>.</div>
+                    </div>
+
+                    <div className="space-y-4 relative z-10">
+                        {currentSchema && (
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Cấu hình Chiến Lược Xóa (Deletion Strategy)</label>
+                                <select 
+                                    value={currentSchema.deletion_strategy || ''} 
+                                    onChange={e => handleUpdateTableMeta('deletion_strategy', e.target.value)}
+                                    className="w-full px-3 py-2 border rounded-md"
+                                >
+                                    <option value="DATE_RANGE">Theo khoảng ngày (DATE_RANGE)</option>
+                                    <option value="CATEGORY">Theo danh mục (CATEGORY)</option>
+                                </select>
+                            </div>
+                        )}
+                        {currentSchema?.deletion_strategy === 'DATE_RANGE' ? (
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Từ ngày (Start Date)</label>
+                                    <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="w-full px-3 py-2 border rounded-md" />
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Đến ngày (End Date)</label>
+                                    <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="w-full px-3 py-2 border rounded-md" />
+                                </div>
+                            </div>
+                        ) : (
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Chọn Nhóm Category / Thương Hiệu Cần Xóa</label>
+                                <select value={selectedCategory} onChange={e=>setSelectedCategory(e.target.value)} className="w-full px-3 py-2 border rounded-md">
+                                    <option value="">-- Bấm để chọn --</option>
+                                    {categories.map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                            </div>
+                        )}
+                        <button onClick={handlePurge} className="w-full py-3 mt-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-2">
+                           <Trash2 size={18}/> Xác Nhận Xóa Dữ Liệu Trực Tiếp
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            {/* SCHEMA EDITOR */}
+            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                        <Eye className="text-emerald-500" /> Cấu Hình Bảng (Schema Editor)
+                    </h2>
+                    <button onClick={handleSaveSchema} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg transition-colors shadow-sm">
+                        Lưu Thay Đổi (Save json)
+                    </button>
+                </div>
+
+                {!currentSchema ? (
+                    <div className="p-6 bg-slate-50 border border-slate-200 rounded-lg text-center">
+                        <p className="text-slate-600 font-medium">Vui lòng chọn một bảng dữ liệu để xem schema</p>
+                    </div>
+                ) : (
+                    <>
+                        <div className="grid grid-cols-1 gap-4 mb-6 p-4 bg-slate-50 border border-slate-200 rounded-lg">
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Tên Hiển Thị (Display Name)</label>
+                                <input 
+                                    type="text" 
+                                    value={currentSchema.display_name || ''} 
+                                    onChange={e => handleUpdateTableMeta('display_name', e.target.value)}
+                                    className="w-full px-3 py-2 border rounded-md"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="overflow-x-auto rounded-lg border border-slate-200">
+                    <table className="w-full text-left text-sm text-slate-600">
+                        <thead className="bg-slate-100 text-slate-800 font-medium">
+                            <tr>
+                                <th className="px-4 py-3 border-b">Tên Kỹ Thuật (Key)</th>
+                                <th className="px-4 py-3 border-b">Kiểu Dữ Liệu</th>
+                                <th className="px-4 py-3 border-b">Ghi Chú & Tên Đọc Hiểu</th>
+                                <th className="px-4 py-3 border-b w-24 text-center">Trạng Thái</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                            {(currentSchema?.columns || []).map((col: any, idx: number) => (
+                                <tr key={col.name + idx} className={`hover:bg-slate-50 ${col.is_hidden ? 'opacity-50 line-through' : ''}`}>
+                                    <td className="px-4 py-3 font-medium text-indigo-600">
+                                        <input 
+                                            type="text" 
+                                            value={col.name || ''} 
+                                            onChange={e => handleUpdateColumnMeta(idx, 'name', e.target.value)}
+                                            className="w-full px-2 py-1 border border-slate-200 rounded font-medium text-indigo-600 focus:ring-1 focus:ring-indigo-500"
+                                        />
+                                    </td>
+                                    <td className="px-4 py-3"><code className="bg-slate-100 px-2 py-0.5 rounded border border-slate-200">{col.type}</code></td>
+                                    <td className="px-4 py-3">
+                                        <input 
+                                            type="text" 
+                                            value={col.description || ''} 
+                                            onChange={e => handleUpdateColumnMeta(idx, 'description', e.target.value)}
+                                            className="w-full px-2 py-1 border border-slate-200 rounded focus:ring-1 focus:ring-indigo-500"
+                                        />
+                                    </td>
+                                    <td className="px-4 py-3 text-center">
+                                        <button 
+                                            onClick={() => handleUpdateColumnMeta(idx, 'is_hidden', !col.is_hidden)}
+                                            className={`text-xs px-2 py-1 border rounded ${col.is_hidden ? 'bg-slate-200 text-slate-600' : 'bg-green-100 text-green-700 border-green-200'}`}
+                                        >
+                                            {col.is_hidden ? 'Đang Ẩn' : 'Hiển thị'}
+                                        </button>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                        </div>
+                    </>
+                )}
+            </div>
+        </div>
+        </DashboardLayout>
+    );
+}

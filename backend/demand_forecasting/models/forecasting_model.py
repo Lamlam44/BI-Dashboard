@@ -9,7 +9,14 @@ import numpy as np
 import logging
 from typing import Tuple, List, Dict, Optional
 import lightgbm as lgb
-from config import MODEL_PARAMS, TRAIN_TEST_SPLIT
+import joblib
+import sys
+from pathlib import Path
+
+# Ensure parent directory is in path for config import
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from df_config import MODEL_PARAMS, TRAIN_TEST_SPLIT
 
 logger = logging.getLogger(__name__)
 
@@ -343,3 +350,35 @@ class DemandForecastingModel:
         except Exception as e:
             logger.error(f"Error in recursive forecasting: {e}")
             raise
+    def save(self, filepath: str):
+        """Save the 3 models (base, lower, upper) and feature definitions to disk."""
+        if not self.is_trained:
+            logger.warning("Attempted to save an untrained model.")
+            return
+
+        model_data = {
+            "model_base": self.model_base,
+            "model_lower": self.model_lower,
+            "model_upper": self.model_upper,
+            "feature_columns": self.feature_columns,
+            "last_training_product_id": self.last_training_product_id
+        }
+        
+        joblib.dump(model_data, filepath)
+        logger.info(f"💾 Model successfully saved to {filepath}")
+
+    @classmethod
+    def load(cls, filepath: str) -> "DemandForecastingModel":
+        """Load the model definitions from disk."""
+        model_data = joblib.load(filepath)
+        
+        instance = cls()
+        instance.model_base = model_data["model_base"]
+        instance.model_lower = model_data["model_lower"]
+        instance.model_upper = model_data["model_upper"]
+        instance.feature_columns = model_data["feature_columns"]
+        instance.last_training_product_id = model_data.get("last_training_product_id", "GLOBAL")
+        instance.is_trained = True
+        
+        logger.info(f"📂 Model successfully loaded from {filepath}")
+        return instance

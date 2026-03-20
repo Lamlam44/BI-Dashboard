@@ -1,0 +1,58 @@
+{
+    "FactSales": {
+        "display_name": "Doanh Số Bán Hàng (FactSales)",
+        "type": "Fact",
+        "deletion_strategy": "DATE_RANGE",
+        "primary_keys": ["SalesKey"],
+        "columns": [
+            {"name": "SalesKey", "type": "int", "description": "Khóa tự sinh"},
+            {"name": "DateKey", "type": "datetime", "description": "Ngày bán"},
+            {"name": "channelKey", "type": "int", "description": "Kênh bán"},
+            {"name": "StoreKey", "type": "int", "description": "Cửa hàng"},
+            {"name": "ProductKey", "type": "int", "description": "Sản phẩm"},
+            {"name": "PromotionKey", "type": "int", "description": "Khuyến mãi"},
+            {"name": "CurrencyKey", "type": "int", "description": "Loại tiền"},
+            {"name": "UnitCost", "type": "float", "description": "Giá vốn"},
+            {"name": "UnitPrice", "type": "float", "description": "Giá bán"},
+            {"name": "SalesQuantity", "type": "int", "description": "Số lượng"},
+            {"name": "ReturnQuantity", "type": "int", "description": "Số lượng trả"},
+            {"name": "ReturnAmount", "type": "float", "description": "Tổng tiền trả"},
+            {"name": "DiscountQuantity", "type": "int", "description": "Số lượng giảm"},
+            {"name": "DiscountAmount", "type": "float", "description": "Tổng tiền giảm"},
+            {"name": "SalesAmount", "type": "float", "description": "Tổng doanh số"},
+            {"name": "TotalCost", "type": "float", "description": "Tổng chi phí"}
+        ]
+    },
+    "DimProduct": {
+        "display_name": "Sản Phẩm (DimProduct)",
+        "type": "Dim",
+        "deletion_strategy": "CATEGORY",
+        "primary_keys": ["ProductKey"],
+        "columns": [
+            {"name": "ProductKey", "type": "int", "description": "Mã SP"},
+            {"name": "ProductLabel", "type": "string", "description": "Nhãn SP"},
+            {"name": "ProductName", "type": "string", "description": "Tên SP"},
+            {"name": "ProductDescription", "type": "string", "description": "Mô tả"},
+            {"name": "ProductSubcategoryKey", "type": "int", "description": "Danh mục con"},
+            {"name": "Manufacturer", "type": "string", "description": "Nhà sản xuất"},
+            {"name": "BrandName", "type": "string", "description": "Thương hiệu"},
+            {"name": "ClassID", "type": "string", "description": "Mã lớp"},
+            {"name": "ClassName", "type": "string", "description": "Tên lớp"},
+            {"name": "StyleID", "type": "string", "description": "Mã kiểu"},
+            {"name": "StyleName", "type": "string", "description": "Tên kiểu"},
+            {"name": "ColorID", "type": "string", "description": "Mã màu"},
+            {"name": "ColorName", "type": "string", "description": "Màu sắc"},
+            {"name": "Size", "type": "string", "description": "Kích thước"},
+            {"name": "SizeRange", "type": "string", "description": "Khoảng KT"},
+            {"name": "SizeUnitMeasureID", "type": "string", "description": "ĐVĐ Kích thước"},
+            {"name": "Weight", "type": "float", "description": "Trọng lượng"},
+            {"name": "WeightUnitMeasureID", "type": "string", "description": "ĐVĐ Trọng lượng"},
+            {"name": "UnitOfMeasureID", "type": "string", "description": "ĐVĐ Số lượng"},
+            {"name": "UnitOfMeasureName", "type": "string", "description": "Tên ĐVĐ"},
+            {"name": "StockTypeID", "type": "string", "description": "Loại kho"},
+            {"name": "StockTypeName", "type": "string", "description": "Tên kho"},
+            {"name": "UnitCost", "type": "float", "description": "Giá vốn"},
+            {"name": "UnitPrice", "type": "float", "description": "Giá bán"}
+        ]
+    }
+}

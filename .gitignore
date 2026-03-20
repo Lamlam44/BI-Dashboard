@@ -1,58 +1,66 @@
+# ========================
+# OS & Environment
+# ========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.pem
+
+# ========================
+# Node.js & Next.js (Frontend)
+# ========================
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
 # Dependencies
-/node_modules
-/.pnp
+node_modules/
+.pnp
 .pnp.js
 
-# Testing
-/coverage
+# Build Output & Testing
+.next/
+out/
+build/
+coverage/
 
-# Next.js
-/.next/
-/out/
-
-# Production
-/build
-
-# Misc
-.DS_Store
-*.pem
+# Environment Variables
 .env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
-
-# Debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# IDE
-.idea
-.vscode
-*.swp
-*.swo
-*~
 .env.*.local
 
-# OS
-Thumbs.db
-
-
-# Datasets & Large Files
-BI_Datasets/
-**/*.csv
-**/*.xlsx
-
-# Python Virtual Environments & Pycache
+# ========================
+# Python (Backend)
+# ========================
+# Byte-compiled / Optimized files
 __pycache__/
 *.py[cod]
 *.class
-venv/
-.env_python/
-env/
-.venv/
 
-# Ignore node_modules regardless of location
-node_modules/
-**/node_modules/
+# Virtual environments
+venv/
+.venv/
+env/
+.env_python/
+
+# ========================
+# Project Specific (Data & Models)
+# ========================
+# Datasets (Avoid committing large files)
+BI_Datasets/
+*.csv
+*.xlsx
+
+# Generated ML Models and Backups
+backend/data_management/backups/

@@ -28,7 +28,7 @@ from data.feature_engineering import (
     get_feature_columns
 )
 from models.forecasting_model import DemandForecastingModel
-import config
+import df_config as config
 
 # Configure logging
 logging.basicConfig(
@@ -54,7 +54,7 @@ app.add_middleware(
 )
 
 # Global model and data storage
-model = DemandForecastingModel()
+model = None
 daily_sales = None
 available_products = None
 
@@ -96,7 +96,7 @@ class TrainingResponse(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize data on application startup."""
-    global daily_sales, available_products
+    global daily_sales, available_products, model
     try:
         logger.info("Starting up - Loading data...")
         
@@ -114,7 +114,16 @@ async def startup_event():
         
         logger.info(f"Data loaded successfully!")
         logger.info(f"Available products: {len(available_products)}")
-        
+
+        # Try to load pre-trained global model
+        model_path = Path(__file__).parent.parent / "saved_models" / "global_demand_model.pkl"
+        try:
+            model = DemandForecastingModel.load(str(model_path))
+            logger.info(f"✅ Global Model loaded successfully from {model_path}.")
+        except Exception as e:
+            model = DemandForecastingModel()
+            logger.warning(f"⚠️ Could not load Global Model from {model_path}, it will run in On-Demand mode: {e}")
+            
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         raise
