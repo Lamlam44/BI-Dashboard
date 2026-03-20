@@ -14,10 +14,35 @@ import {
   Area,
 } from "recharts";
 
+const generateMockForecastData = (days: number) => {
+  const mockData = [];
+  const today = new Date();
+  let actualValue = 450;
+  let predictedValue = 455;
+
+  for (let i = 0; i < days; i++) {
+    const date = new Date(today);
+    date.setDate(date.getDate() + i);
+    const dateStr = date.toISOString().split("T")[0];
+
+    actualValue += Math.random() * 40 - 20;
+    predictedValue += Math.random() * 50 - 25;
+
+    mockData.push({
+      date: dateStr,
+      actual: parseFloat(actualValue.toFixed(1)),
+      predicted: parseFloat(predictedValue.toFixed(1)),
+      lowerBound: parseFloat((predictedValue - 50).toFixed(1)),
+      upperBound: parseFloat((predictedValue + 50).toFixed(1)),
+    });
+  }
+  return mockData;
+};
+
 export default function ForecastingClient() {
-  const [data, setData] = useState([]);
+  const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState<string | null>(null);
   const [productId, setProductId] = useState(310); // Standard demo ID
   const [forecastSteps, setForecastSteps] = useState(14);
 
@@ -26,11 +51,12 @@ export default function ForecastingClient() {
     setError(null);
     try {
       const response = await fetch(
-        `http://localhost:8000/forecast/${productId}?days_ahead=${forecastSteps}`,
+        `http://localhost:8002/forecast/${productId}?days_ahead=${forecastSteps}`,
+        { signal: AbortSignal.timeout(5000) },
       );
       if (!response.ok) {
         throw new Error(
-          "Failed to fetch forecast data from backend. Make sure the FastAPI server is running on port 8000!",
+          "Backend temporarily unavailable. Showing sample forecast data.",
         );
       }
       const rawData = await response.json();
@@ -56,12 +82,16 @@ export default function ForecastingClient() {
       setData(formattedData);
     } catch (err: any) {
       setError(err.message);
+      // Show sample data as fallback
+      const sampleData = generateMockForecastData(forecastSteps);
+      setData(sampleData);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
+    // Fetch real data from backend on mount
     fetchForecast();
   }, []);
 

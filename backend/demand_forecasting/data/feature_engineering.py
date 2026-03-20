@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 from typing import List
 import logging
-from config import LAG_DAYS, ROLLING_MEAN_DAYS
+from df_config import LAG_DAYS, ROLLING_MEAN_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -261,11 +261,12 @@ def get_feature_columns(features_df: pd.DataFrame) -> List[str]:
         "UnitPrice", "DiscountAmount"
     }
     
+    # Only include numeric/bool columns to prevent LightGBM string conversion errors
+    numeric_cols = set(features_df.select_dtypes(include=[np.number, bool]).columns)
+
     feature_cols = [
         col for col in features_df.columns
-        if col not in exclude_cols
+        if col not in exclude_cols and col in numeric_cols
     ]
-    
-    logger.info(f"Selected {len(feature_cols)} feature columns: {feature_cols}")
-    
+
     return feature_cols

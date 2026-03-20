@@ -9,7 +9,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent
 
 # Data directories
-DATA_DIR = PROJECT_ROOT.parent / "BI_Datasets"
+DATA_DIR = PROJECT_ROOT.parent.parent / "BI_Datasets"
 FACT_SALES_PATH = DATA_DIR / "FactSales.csv"
 DIM_PRODUCT_PATH = DATA_DIR / "DimProduct.csv"
 DIM_DATE_PATH = DATA_DIR / "DimDate.csv"
