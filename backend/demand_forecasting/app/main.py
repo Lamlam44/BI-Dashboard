@@ -29,6 +29,7 @@ from data.feature_engineering import (
 )
 from models.forecasting_model import DemandForecastingModel
 import df_config as config
+from batch_train import train_global_model
 
 # Configure logging
 logging.basicConfig(
@@ -176,6 +177,40 @@ async def list_products(limit: int = Query(10, ge=1, le=100)):
         raise
     except Exception as e:
         logger.error(f"Error listing products: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/refresh-ai-data")
+async def refresh_ai_data():
+    """Refreshes the in-memory data and Retrains the global model from the latest CSV"""
+    global daily_sales, available_products, model
+    try:
+        logger.info("Triggering data refresh and AI retraining...")
+        
+        # This will reload files, train, and save to .pkl overwriting the old one
+        train_global_model()
+        
+        # After successful train and save, we must update our in-memory global vars
+        # Load raw data
+        fact_sales, dim_product, dim_date = load_raw_data()
+        
+        # Prepare sales data
+        sales_data = prepare_sales_data(fact_sales, dim_product, dim_date)
+        
+        # Aggregate to daily level
+        daily_sales = aggregate_daily_sales(sales_data)
+        
+        # Get list of available products
+        available_products = daily_sales["ProductKey"].unique().tolist()
+        
+        # Reload model
+        model_path = Path(__file__).parent.parent / "saved_models" / "global_demand_model.pkl"
+        model = DemandForecastingModel.load(str(model_path))
+        
+        return {"status": "success", "message": "Tiến trình đồng bộ và Train lại Mô hình AI thành công. Đã ghi đè file .pkl."}
+    
+    except Exception as e:
+        logger.error(f"Error during refresh: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -16,11 +16,6 @@
       "static/chunks/main-app.js",
       "static/chunks/app/dashboard/page.js"
     ],
-    "/item-trends/page": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/item-trends/page.js"
-    ],
     "/forecasting/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",

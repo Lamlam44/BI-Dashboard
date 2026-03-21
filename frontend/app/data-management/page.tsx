@@ -15,6 +15,9 @@ export default function DataManagementPage() {
     const [startDate, setStartDate] = useState('');
     const [endDate, setEndDate] = useState('');
     const [selectedCategory, setSelectedCategory] = useState('');
+    
+    // UI state
+    const [isEditingSchema, setIsEditingSchema] = useState(false);
 
     useEffect(() => {
         fetch(`${API_BASE}/schema`)
@@ -70,6 +73,7 @@ export default function DataManagementPage() {
             });
             if (res.ok) {
                 alert('✅ Đã lưu cấu hình Schema thành công!');
+                setIsEditingSchema(false);
             } else {
                 alert('Lỗi lưu cấu hình.');
             }
@@ -204,9 +208,18 @@ export default function DataManagementPage() {
                     <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
                         <Eye className="text-emerald-500" /> Cấu Hình Bảng (Schema Editor)
                     </h2>
-                    <button onClick={handleSaveSchema} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg transition-colors shadow-sm">
-                        Lưu Thay Đổi (Save json)
-                    </button>
+                    <div className="flex gap-2">
+                        {!isEditingSchema && (
+                            <button onClick={() => setIsEditingSchema(true)} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors shadow-sm">
+                                Chỉnh sửa cấu hình bảng
+                            </button>
+                        )}
+                        {isEditingSchema && (
+                            <button onClick={handleSaveSchema} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg transition-colors shadow-sm">
+                                Lưu Thay Đổi (Save json)
+                            </button>
+                        )}
+                    </div>
                 </div>
 
                 {!currentSchema ? (
@@ -222,7 +235,8 @@ export default function DataManagementPage() {
                                     type="text" 
                                     value={currentSchema.display_name || ''} 
                                     onChange={e => handleUpdateTableMeta('display_name', e.target.value)}
-                                    className="w-full px-3 py-2 border rounded-md"
+                                    disabled={!isEditingSchema}
+                                    className={`w-full px-3 py-2 border rounded-md ${!isEditingSchema ? 'bg-slate-100 text-slate-500 cursor-not-allowed' : ''}`}
                                 />
                             </div>
                         </div>
@@ -245,7 +259,8 @@ export default function DataManagementPage() {
                                             type="text" 
                                             value={col.name || ''} 
                                             onChange={e => handleUpdateColumnMeta(idx, 'name', e.target.value)}
-                                            className="w-full px-2 py-1 border border-slate-200 rounded font-medium text-indigo-600 focus:ring-1 focus:ring-indigo-500"
+                                            disabled={!isEditingSchema}
+                                            className={`w-full px-2 py-1 border border-slate-200 rounded font-medium text-indigo-600 ${isEditingSchema ? 'focus:ring-1 focus:ring-indigo-500' : 'bg-transparent border-transparent cursor-default'}`}
                                         />
                                     </td>
                                     <td className="px-4 py-3"><code className="bg-slate-100 px-2 py-0.5 rounded border border-slate-200">{col.type}</code></td>
@@ -254,13 +269,15 @@ export default function DataManagementPage() {
                                             type="text" 
                                             value={col.description || ''} 
                                             onChange={e => handleUpdateColumnMeta(idx, 'description', e.target.value)}
-                                            className="w-full px-2 py-1 border border-slate-200 rounded focus:ring-1 focus:ring-indigo-500"
+                                            disabled={!isEditingSchema}
+                                            className={`w-full px-2 py-1 border border-slate-200 rounded ${isEditingSchema ? 'focus:ring-1 focus:ring-indigo-500' : 'bg-transparent border-transparent cursor-default'}`}
                                         />
                                     </td>
                                     <td className="px-4 py-3 text-center">
                                         <button 
                                             onClick={() => handleUpdateColumnMeta(idx, 'is_hidden', !col.is_hidden)}
-                                            className={`text-xs px-2 py-1 border rounded ${col.is_hidden ? 'bg-slate-200 text-slate-600' : 'bg-green-100 text-green-700 border-green-200'}`}
+                                            disabled={!isEditingSchema}
+                                            className={`text-xs px-2 py-1 border rounded ${col.is_hidden ? 'bg-slate-200 text-slate-600' : 'bg-green-100 text-green-700 border-green-200'} ${!isEditingSchema ? 'opacity-70 cursor-not-allowed' : 'hover:opacity-80'}`}
                                         >
                                             {col.is_hidden ? 'Đang Ẩn' : 'Hiển thị'}
                                         </button>
