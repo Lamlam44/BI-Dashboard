@@ -160,10 +160,10 @@ def trending_products(start_date: Optional[str] = None, end_date: Optional[str] 
     df_merged = pd.merge(df_filtered, df_prod, on='ProductKey')
     grouped = df_merged.groupby('ProductName')['SalesQuantity'].sum().reset_index()
 
-    top = grouped.sort_values(by='SalesQuantity', ascending=False).head(6)
+    # BẢN SỬA: Đổi .head(6) thành .head(10) để lấy Top 10
+    top = grouped.sort_values(by='SalesQuantity', ascending=False).head(10)
 
     return [{"name": r['ProductName'], "qty": int(r['SalesQuantity'])} for _, r in top.iterrows()]
-
 # ==============================
 # Promotion Impact
 # ==============================
