@@ -285,8 +285,9 @@ class DemandForecastingModel:
         try:
             logger.info(f"Forecasting {n_steps} steps ahead (recursive)...")
             
-            # Make a working copy
-            future_data = current_data_df.copy()
+            # Make a working copy (optimized: only keep last 90 days to drastically speed up recursive feature engineering)
+            # Max lag is typically 30 days, so 90 days is safe and prevents O(N^2) slowdown on huge datasets
+            future_data = current_data_df.tail(90).copy()
             forecasts = []
             
             # Import feature engineering functions

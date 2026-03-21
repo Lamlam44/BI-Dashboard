@@ -42,9 +42,33 @@ const generateMockForecastData = (days: number) => {
 export default function ForecastingClient() {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [productId, setProductId] = useState(310); // Standard demo ID
   const [forecastSteps, setForecastSteps] = useState(14);
+
+  const handleRefreshAI = async () => {
+    if (!confirm("Hệ thống sẽ tải lại dữ liệu từ Data Warehouse và tiến hành huấn luyện (Retrain) lại toàn bộ mô hình AI. Quá trình này có thể mất một chút thời gian. Bạn chắc chắn muốn tiếp tục?")) return;
+    
+    setIsRefreshing(true);
+    setError(null);
+    try {
+      // Cho thời gian timeout của fetch là 5 phút vì model sẽ cần một chú thời gian để train
+      const response = await fetch(`http://localhost:8002/refresh-ai-data`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        throw new Error("Có lỗi xảy ra khi làm mới dữ liệu AI từ backend.");
+      }
+      const result = await response.json();
+      alert(result.message || "Thành công lấy dữ liệu và tạo ra file .pkl mới!");
+      fetchForecast(); // tải lại chart
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   const fetchForecast = async () => {
     setLoading(true);
@@ -98,13 +122,28 @@ export default function ForecastingClient() {
   return (
     <DashboardLayout>
       <div className="space-y-8">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-900">
-            AI Demand Forecasting
-          </h1>
-          <p className="text-slate-600 mt-2">
-            Predictive analytics dynamically connected to the LightGBM Backend
-          </p>
+        <div className="flex justify-between items-center">
+          <div>
+            <h1 className="text-3xl font-bold text-slate-900">
+              AI Demand Forecasting
+            </h1>
+            <p className="text-slate-600 mt-2">
+              Predictive analytics dynamically connected to the LightGBM Backend
+            </p>
+          </div>
+          <button
+            onClick={handleRefreshAI}
+            disabled={isRefreshing}
+            className={`px-4 py-2 text-white font-semibold rounded-lg shadow-sm flex items-center gap-2 
+              ${isRefreshing ? "bg-slate-400 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-700"}
+            `}
+          >
+            {isRefreshing ? (
+              <>Mô hình AI đang học lại dữ liệu (Retraining)...</>
+            ) : (
+              <>Làm mới & Retrain Dữ liệu AI</>
+            )}
+          </button>
         </div>
 
         <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm">
