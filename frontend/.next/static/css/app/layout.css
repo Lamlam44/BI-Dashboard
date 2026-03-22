@@ -556,11 +556,6 @@ video {
 .mb-6 {
   margin-bottom: 1.5rem;
 }
-<<<<<<< HEAD
-.ml-2 {
-  margin-left: 0.5rem;
-}
-=======
 .mb-8 {
   margin-bottom: 2rem;
 }
@@ -570,7 +565,6 @@ video {
 .ml-5 {
   margin-left: 1.25rem;
 }
->>>>>>> origin/main
 .ml-64 {
   margin-left: 16rem;
 }
@@ -610,12 +604,9 @@ video {
 .h-10 {
   height: 2.5rem;
 }
-<<<<<<< HEAD
 .h-12 {
   height: 3rem;
 }
-=======
->>>>>>> origin/main
 .h-2 {
   height: 0.5rem;
 }
@@ -628,25 +619,20 @@ video {
 .h-32 {
   height: 8rem;
 }
-.h-64 {
-  height: 16rem;
-}
 .h-72 {
   height: 18rem;
 }
 .h-8 {
   height: 2rem;
 }
-<<<<<<< HEAD
 .h-\[350px\] {
   height: 350px;
-=======
+}
 .h-\[500px\] {
   height: 500px;
 }
 .h-\[600px\] {
   height: 600px;
->>>>>>> origin/main
 }
 .h-full {
   height: 100%;
@@ -660,12 +646,9 @@ video {
 .w-10 {
   width: 2.5rem;
 }
-<<<<<<< HEAD
 .w-12 {
   width: 3rem;
 }
-=======
->>>>>>> origin/main
 .w-16 {
   width: 4rem;
 }
@@ -699,13 +682,11 @@ video {
 .flex-shrink-0 {
   flex-shrink: 0;
 }
-<<<<<<< HEAD
-.transform {
-  transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
-=======
 .flex-grow {
   flex-grow: 1;
->>>>>>> origin/main
+}
+.transform {
+  transform: translate(var(--tw-translate-x), var(--tw-translate-y)) rotate(var(--tw-rotate)) skewX(var(--tw-skew-x)) skewY(var(--tw-skew-y)) scaleX(var(--tw-scale-x)) scaleY(var(--tw-scale-y));
 }
 @keyframes pulse {
 
@@ -716,7 +697,6 @@ video {
 .animate-pulse {
   animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
-<<<<<<< HEAD
 @keyframes spin {
 
   to {
@@ -725,13 +705,12 @@ video {
 }
 .animate-spin {
   animation: spin 1s linear infinite;
-=======
+}
 .cursor-default {
   cursor: default;
 }
 .cursor-not-allowed {
   cursor: not-allowed;
->>>>>>> origin/main
 }
 .cursor-pointer {
   cursor: pointer;
@@ -864,19 +843,14 @@ video {
 .border-dashed {
   border-style: dashed;
 }
-<<<<<<< HEAD
 .border-blue-100 {
   --tw-border-opacity: 1;
   border-color: rgb(219 234 254 / var(--tw-border-opacity, 1));
 }
-=======
->>>>>>> origin/main
 .border-blue-500 {
   --tw-border-opacity: 1;
   border-color: rgb(59 130 246 / var(--tw-border-opacity, 1));
 }
-<<<<<<< HEAD
-=======
 .border-gray-100 {
   --tw-border-opacity: 1;
   border-color: rgb(243 244 246 / var(--tw-border-opacity, 1));
@@ -885,7 +859,6 @@ video {
   --tw-border-opacity: 1;
   border-color: rgb(229 231 235 / var(--tw-border-opacity, 1));
 }
->>>>>>> origin/main
 .border-green-200 {
   --tw-border-opacity: 1;
   border-color: rgb(187 247 208 / var(--tw-border-opacity, 1));
@@ -898,15 +871,13 @@ video {
   --tw-border-opacity: 1;
   border-color: rgb(224 231 255 / var(--tw-border-opacity, 1));
 }
-<<<<<<< HEAD
 .border-indigo-500 {
   --tw-border-opacity: 1;
   border-color: rgb(99 102 241 / var(--tw-border-opacity, 1));
-=======
+}
 .border-purple-500 {
   --tw-border-opacity: 1;
   border-color: rgb(168 85 247 / var(--tw-border-opacity, 1));
->>>>>>> origin/main
 }
 .border-red-100 {
   --tw-border-opacity: 1;
@@ -928,13 +899,11 @@ video {
   --tw-border-opacity: 1;
   border-color: rgb(30 41 59 / var(--tw-border-opacity, 1));
 }
-<<<<<<< HEAD
-.border-t-transparent {
-  border-top-color: transparent;
-=======
 .border-transparent {
   border-color: transparent;
->>>>>>> origin/main
+}
+.border-t-transparent {
+  border-top-color: transparent;
 }
 .bg-blue-300 {
   --tw-bg-opacity: 1;
@@ -1094,12 +1063,9 @@ video {
 .pb-2 {
   padding-bottom: 0.5rem;
 }
-<<<<<<< HEAD
-=======
 .pt-4 {
   padding-top: 1rem;
 }
->>>>>>> origin/main
 .text-left {
   text-align: left;
 }
@@ -1142,12 +1108,9 @@ video {
 .uppercase {
   text-transform: uppercase;
 }
-<<<<<<< HEAD
-=======
 .italic {
   font-style: italic;
 }
->>>>>>> origin/main
 .tracking-tight {
   letter-spacing: -0.025em;
 }
@@ -1162,13 +1125,10 @@ video {
   --tw-text-opacity: 1;
   color: rgb(37 99 235 / var(--tw-text-opacity, 1));
 }
-<<<<<<< HEAD
 .text-blue-700 {
   --tw-text-opacity: 1;
   color: rgb(29 78 216 / var(--tw-text-opacity, 1));
 }
-=======
->>>>>>> origin/main
 .text-emerald-500 {
   --tw-text-opacity: 1;
   color: rgb(16 185 129 / var(--tw-text-opacity, 1));
@@ -1185,17 +1145,10 @@ video {
   --tw-text-opacity: 1;
   color: rgb(55 65 81 / var(--tw-text-opacity, 1));
 }
-<<<<<<< HEAD
-=======
 .text-gray-800 {
   --tw-text-opacity: 1;
   color: rgb(31 41 55 / var(--tw-text-opacity, 1));
 }
-.text-green-600 {
-  --tw-text-opacity: 1;
-  color: rgb(22 163 74 / var(--tw-text-opacity, 1));
-}
->>>>>>> origin/main
 .text-green-700 {
   --tw-text-opacity: 1;
   color: rgb(21 128 61 / var(--tw-text-opacity, 1));

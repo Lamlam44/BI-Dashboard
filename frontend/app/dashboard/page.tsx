@@ -62,11 +62,11 @@ const Dashboard = () => {
   };
 
   const lineChartData = {
-    labels: data.trend?.labels || [],
+    labels: data?.trend?.labels || [],
     datasets: [
       {
         label: 'Doanh Số (Sales)',
-        data: data.trend?.data || [],
+        data: data?.trend?.data || [],
         borderColor: 'rgb(53, 162, 235)',
         backgroundColor: 'rgba(53, 162, 235, 0.5)',
         tension: 0.3,
@@ -77,10 +77,10 @@ const Dashboard = () => {
   };
 
   const pieChartData = {
-    labels: data.store_pie?.labels || [],
+    labels: data?.store_pie?.labels || [],
     datasets: [
       {
-        data: data.store_pie?.data || [],
+        data: data?.store_pie?.data || [],
         backgroundColor: [
           'rgba(255, 99, 132, 0.8)',
           'rgba(54, 162, 235, 0.8)',

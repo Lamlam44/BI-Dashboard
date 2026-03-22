@@ -9,13 +9,9 @@
     "lint": "next lint"
   },
   "dependencies": {
-<<<<<<< HEAD
-    "chart.js": "^4.5.1",
-=======
     "axios": "^1.13.6",
     "chart.js": "^4.5.1",
     "chartjs-plugin-datalabels": "^2.2.0",
->>>>>>> origin/main
     "lucide-react": "^0.263.0",
     "next": "^14.0.0",
     "react": "^18.2.0",
