@@ -89,14 +89,15 @@ def train_global_model():
     
     print("\n=== Model Metrics ===")
     print(metrics)
-    
+
     # 5. Save the 3 brains
-    model_dir = Path("saved_models")
+    base_dir = Path(__file__).parent
+    model_dir = base_dir / "saved_models"
     model_dir.mkdir(exist_ok=True)
-    
+
     model_path = model_dir / "global_demand_model.pkl"
     model.save(str(model_path))
-    
+
     print(f"\n✅ FULL WORKFLOW COMPLETE! Model saved as 3 components in '{model_path}'")
 
 if __name__ == "__main__":

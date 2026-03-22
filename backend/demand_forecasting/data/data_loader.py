@@ -84,7 +84,7 @@ def prepare_sales_data(
         # Resolve column names when merging created duplicates
         if "UnitPrice_dim" in sales.columns:
             # Prefer the UnitPrice from DimProduct if conflicting
-            sales["UnitPrice"] = sales["UnitPrice_dim"]
+            sales["UnitPrice"] = sales["UnitPrice_dim"].fillna(sales.get("UnitPrice_x", sales.get("UnitPrice", 0)))
             sales = sales.drop(columns=["UnitPrice_dim", "UnitPrice_x", "UnitPrice_y"], errors="ignore")
         elif "UnitPrice_x" in sales.columns:
             sales["UnitPrice"] = sales["UnitPrice_x"]
@@ -98,6 +98,9 @@ def prepare_sales_data(
             how="left"
         )
         
+        # Điền tên cho các sản phẩm không có trong DimProduct (như 915)
+        sales["ProductName"] = sales["ProductName"].fillna("Unknown Product " + sales["ProductKey"].astype(str))
+
         # Sort by ProductKey and DateKey
         sales = sales.sort_values(by=["ProductKey", "DateKey"]).reset_index(drop=True)
         

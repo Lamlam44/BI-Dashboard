@@ -217,6 +217,7 @@
                 "type": "float",
                 "description": "Giá bán"
             }
+<<<<<<< HEAD
         ]
     },
     "DimDate": {
@@ -417,6 +418,8 @@
                 "type": "int",
                 "description": "Khóa NV"
             }
+=======
+>>>>>>> origin/main
         ]
     }
 }

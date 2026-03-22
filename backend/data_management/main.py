@@ -11,13 +11,17 @@ from datetime import datetime
 import shutil
 import io
 
+from .analytics import router as analytics_router
+
+
+
 from dm_config import DATA_DIR, BACKUP_DIR, SCHEMA_FILE, API_HOST, API_PORT
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="BI Data Management API")
-
+app.include_router(analytics_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

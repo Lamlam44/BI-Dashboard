@@ -16,10 +16,17 @@
       "static/chunks/main-app.js",
       "static/chunks/app/dashboard/page.js"
     ],
+<<<<<<< HEAD
     "/data-management/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
       "static/chunks/app/data-management/page.js"
+=======
+    "/item-trends/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/item-trends/page.js"
+>>>>>>> origin/main
     ]
   }
 }

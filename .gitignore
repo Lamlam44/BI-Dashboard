@@ -64,3 +64,4 @@ BI_Datasets/
 
 # Generated ML Models and Backups
 backend/data_management/backups/
+frontend/.next/
