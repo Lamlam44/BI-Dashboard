@@ -1,5 +1,5 @@
 {
-  "/data-management/page": "app/data-management/page.js",
-  "/forecasting/page": "app/forecasting/page.js",
-  "/dashboard/page": "app/dashboard/page.js"
+  "/page": "app/page.js",
+  "/dashboard/page": "app/dashboard/page.js",
+  "/item-trends/page": "app/item-trends/page.js"
 }
