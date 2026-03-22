@@ -42,9 +42,10 @@ if __name__ == "__main__":
     data_thread.start()
     forecast_thread.start()
     
+    import time
     # Keep main thread alive
     try:
         while True:
-            pass
+            time.sleep(1)
     except KeyboardInterrupt:
         print("\nShutting down...")

@@ -132,58 +132,162 @@ class PurgeRequest(BaseModel):
 
 @app.post("/purge")
 def purge_data(request: PurgeRequest):
-    schemas = load_schema()
-    table_name = request.table_name
-    if table_name not in schemas:
-        raise HTTPException(status_code=404, detail="Table schema not found")
-        
-    schema = schemas[table_name]
-    file_path = DATA_DIR / f"{table_name}.csv"
-    
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="Data file not found")
-        
-    df = pd.read_csv(file_path)
-    initial_len = len(df)
-    
-    # Backup
-    backup_name = f"{table_name}_prepurge_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    shutil.copy2(file_path, BACKUP_DIR / backup_name)
-    
-    if schema["deletion_strategy"] == "DATE_RANGE":
-        # Assuming DateKey exists
-        df['DateKey'] = pd.to_datetime(df['DateKey'])
-        condition = pd.Series(True, index=df.index)
-        
-        if request.start_date:
-            condition = condition & (df['DateKey'] >= pd.to_datetime(request.start_date))
-        if request.end_date:
-            condition = condition & (df['DateKey'] <= pd.to_datetime(request.end_date))
+    try:
+        schemas = load_schema()
+        table_name = request.table_name
+        if table_name not in schemas:
+            raise HTTPException(status_code=404, detail="Table schema not found")
             
-        df = df[~condition] # keep rows that DO NOT match the purge condition
+        schema = schemas[table_name]
+        file_path = DATA_DIR / f"{table_name}.csv"
         
-    elif schema["deletion_strategy"] == "CATEGORY":
-        # In DimProduct we have ClassName or BrandName, assume BrandName for now if Category not explicit
-        if request.category and 'BrandName' in df.columns:
-            df = df[df['BrandName'] != request.category]
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="Data file not found")
             
-    df.to_csv(file_path, index=False)
-    
-    return {
-        "message": "Data purged successfully",
-        "deleted_rows": initial_len - len(df),
-        "remaining_rows": len(df)
-    }
+        df = pd.read_csv(file_path)
+        initial_len = len(df)
+        
+        # Backup
+        backup_name = f"{table_name}_prepurge_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        shutil.copy2(file_path, BACKUP_DIR / backup_name)
+        
+        if schema["deletion_strategy"] == "DATE_RANGE":
+            if not request.start_date and not request.end_date:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(status_code=400, content={"detail": "Vui lòng chọn [Từ ngày] hoặc [Đến ngày] để có thể lọc dữ liệu cần xóa."})
+                
+            if 'DateKey' not in df.columns:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(status_code=400, content={"detail": "Bảng không có cột DateKey để xóa theo định dạng ngày tháng."})
+                
+            df['DateKey'] = pd.to_datetime(df['DateKey'], errors='coerce', dayfirst=True)
+            condition = pd.Series(True, index=df.index)
+            
+            if request.start_date:
+                condition = condition & (df['DateKey'] >= pd.to_datetime(request.start_date))
+            if request.end_date:
+                condition = condition & (df['DateKey'] <= pd.to_datetime(request.end_date))
+                
+            df = df[~condition] # keep rows that DO NOT match the purge condition
+            
+        elif schema["deletion_strategy"] == "CATEGORY":
+            if not request.category:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(status_code=400, content={"detail": "Vui lòng chọn Category/Brand cần xóa từ danh sách thả xuống."})
+                
+            cat_col = 'BrandName' if 'BrandName' in df.columns else 'StoreName' if 'StoreName' in df.columns else None
+            if cat_col:
+                df = df[df[cat_col] != request.category]
+            else:
+                from fastapi.responses import JSONResponse
+                return JSONResponse(status_code=400, content={"detail": "Bảng này chưa hỗ trợ cấu hình cột xóa theo Category."})
+                
+        deleted = initial_len - len(df)
+        if deleted == 0:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=400, content={"detail": "Không có dòng dữ liệu nào khớp với thông tin/ngày tháng bạn vừa cung cấp để xóa. Vui lòng kiểm tra lại Dữ liệu Gốc!"})
+            
+        df.to_csv(file_path, index=False)
+        
+        return {
+            "message": "Data purged successfully",
+            "deleted_rows": initial_len - len(df),
+            "remaining_rows": len(df)
+        }
+    except Exception as e:
+        logger.error(f"Purge error: {e}")
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=400, content={"detail": f"Purge thất bại: {str(e)}"})
 
 @app.get("/categories/{table_name}")
 def get_categories(table_name: str):
     file_path = DATA_DIR / f"{table_name}.csv"
     if not file_path.exists():
-        return []
+        return {"categories": []}
     df = pd.read_csv(file_path)
     if 'BrandName' in df.columns:
-        return df['BrandName'].dropna().unique().tolist()
-    return []
+        return {"categories": df['BrandName'].dropna().unique().tolist()}
+    elif 'StoreName' in df.columns:
+        return {"categories": df['StoreName'].dropna().unique().tolist()}
+    return {"categories": []}
+
+@app.get("/api/dashboard/sales")
+def get_sales_dashboard():
+    try:
+        fact_path = DATA_DIR / "FactSales.csv"
+        prod_path = DATA_DIR / "DimProduct.csv"
+        store_path = DATA_DIR / "DimStore.csv"
+        date_path = DATA_DIR / "DimDate.csv"
+        
+        if not fact_path.exists() or os.path.getsize(fact_path) == 0:
+            return {"status": "empty", "message": "Chưa có dữ liệu FactSales."}
+            
+        df_fact = pd.read_csv(fact_path)
+        if len(df_fact) == 0:
+            return {"status": "empty", "message": "FactSales rỗng."}
+            
+        # Merge if columns exist
+        df_store = pd.read_csv(store_path) if store_path.exists() else pd.DataFrame(columns=['StoreKey', 'StoreName'])
+        
+        if 'StoreKey' in df_fact.columns and 'StoreKey' in df_store.columns:
+            # Drop everything but StoreKey and StoreName from DimStore to avoid suffix collisions and memory bloat
+            cols_to_keep = ['StoreKey'] + ([c for c in ['StoreName'] if c in df_store.columns])
+            df_store_slim = df_store[cols_to_keep].drop_duplicates()
+            
+            if 'StoreName' in df_fact.columns:
+                df_fact = df_fact.drop(columns=['StoreName'])
+                
+            df_fact = pd.merge(df_fact, df_store_slim, on='StoreKey', how='left')
+            
+        # Calculation
+        df_fact['TotalSales'] = df_fact.get('SalesQuantity', 0) * df_fact.get('UnitPrice', 0) - df_fact.get('DiscountAmount', 0)
+        
+        # Time processing
+        if 'DateKey' in df_fact.columns:
+            df_fact['DateKey'] = pd.to_datetime(df_fact['DateKey'], errors='coerce', dayfirst=True)
+        else:
+            return {"status": "error", "message": "Thiếu DateKey trong FactSales"}
+            
+        # Summaries
+        max_date = df_fact['DateKey'].max()
+        if pd.isna(max_date):
+            return {"status": "empty", "message": "Không có dữ liệu Date hợp lệ"}
+            
+        ytd_mask = (df_fact['DateKey'].dt.year == max_date.year) & (df_fact['DateKey'] <= max_date)
+        mtd_mask = ytd_mask & (df_fact['DateKey'].dt.month == max_date.month)
+        
+        ytd_sales = float(df_fact.loc[ytd_mask, 'TotalSales'].fillna(0).sum())
+        mtd_sales = float(df_fact.loc[mtd_mask, 'TotalSales'].fillna(0).sum())
+        total_sales = float(df_fact['TotalSales'].fillna(0).sum())
+        
+        # Line chart
+        trend = df_fact.groupby(df_fact['DateKey'].dt.strftime('%Y-%m-%d'))['TotalSales'].sum().reset_index()
+        trend_data = {
+            "labels": trend['DateKey'].tolist(),
+            "data": trend['TotalSales'].fillna(0).tolist()
+        }
+        
+        # Pie chart
+        store_col = 'StoreName' if 'StoreName' in df_fact.columns else 'StoreKey'
+        pie = df_fact.groupby(store_col)['TotalSales'].sum().reset_index()
+        pie_data = {
+            "labels": pie[store_col].astype(str).tolist(),
+            "data": pie['TotalSales'].fillna(0).tolist()
+        }
+        
+        return {
+            "status": "success",
+            "ytd": ytd_sales,
+            "mtd": mtd_sales,
+            "total": total_sales,
+            "trend": trend_data,
+            "store_pie": pie_data,
+            "last_updated": max_date.strftime('%Y-%m-%d')
+        }
+        
+    except Exception as e:
+        logger.error(f"Dashboard error: {e}")
+        return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
     import uvicorn

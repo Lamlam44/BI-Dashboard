@@ -1,4 +1,4 @@
-// File: D:\BI_Dashboard\BI-Dashboard\frontend\app\dashboard\page.tsx
+// File: C:\Users\LEGION\BI-Dashboard\frontend\app\dashboard\page.tsx
 import * as entry from '../../../../app/dashboard/page.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 

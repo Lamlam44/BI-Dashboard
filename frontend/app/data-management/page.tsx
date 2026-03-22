@@ -10,6 +10,7 @@ export default function DataManagementPage() {
     const [schemas, setSchemas] = useState<any>({});
     const [selectedTable, setSelectedTable] = useState<string>('');
     const [categories, setCategories] = useState<string[]>([]);
+    const [isUploading, setIsUploading] = useState(false);
     
     // Purge states
     const [startDate, setStartDate] = useState('');
@@ -32,13 +33,47 @@ export default function DataManagementPage() {
         if (selectedTable && schemas[selectedTable]?.deletion_strategy === 'CATEGORY') {
             fetch(`${API_BASE}/categories/${selectedTable}`)
                 .then(res => res.json())
-                .then(data => setCategories(data))
+                .then(data => setCategories(data.categories || []))
                 .catch(err => console.error(err));
         }
     }, [selectedTable, schemas]);
 
     const handleDownloadTemplate = () => {
         window.open(`${API_BASE}/template/${selectedTable}`);
+    };
+
+    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+
+        if (!selectedTable) {
+            alert('Vui lòng chọn bảng dữ liệu trước khi nạp file.');
+            return;
+        }
+
+        setIsUploading(true);
+        const formData = new FormData();
+        formData.append('table_name', selectedTable);
+        formData.append('file', file);
+
+        try {
+            const res = await fetch(`${API_BASE}/ingest`, {
+                method: 'POST',
+                body: formData,
+            });
+            const result = await res.json();
+            if (res.ok) {
+                alert(`✅ Nạp dữ liệu thành công!\n${result.message}`);
+            } else {
+                alert(`❌ Lỗi: ${result.detail || result.message || 'Server từ chối'}`);
+            }
+        } catch (err) {
+            console.error(err);
+            alert('❌ Lỗi kết nối đến Server xử lý dữ liệu.');
+        } finally {
+            setIsUploading(false);
+            e.target.value = ''; // Reset input để cho phép chọn lại file giống tên
+        }
     };
 
     const handleUpdateTableMeta = (field: string, value: string) => {
@@ -92,10 +127,16 @@ export default function DataManagementPage() {
                     category: selectedCategory || undefined
                 })
             });
+            if (!res.ok) {
+                const errResult = await res.json().catch(() => ({ detail: 'Lỗi không xác định từ Server' }));
+                alert(`❌ Lỗi Xóa dữ liệu: ${errResult.detail || errResult.message || 'Lỗi 500'}`);
+                return;
+            }
             const result = await res.json();
             alert(`✅ Xóa thành công!\nSố dòng đã xóa: ${result.deleted_rows}\nSố dòng còn lại: ${result.remaining_rows}`);
         } catch(e) {
-            alert('Lỗi! Vui lòng kiểm tra lại Backup.');
+            console.error(e);
+            alert('Lỗi kết nối tới Server. Vui lòng kiểm tra lại Database.');
         }
     };
 
@@ -138,11 +179,20 @@ export default function DataManagementPage() {
                     </h2>
                     <p className="text-sm text-slate-500 mb-6">File Excel Upload sẽ được tự độ gộp với file gốc. Các Record trùng lặp (Primary Key) sẽ giữ bản mới nhất.</p>
                     
-                    <div className="border-2 border-dashed border-slate-300 rounded-xl p-10 flex flex-col items-center justify-center bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer relative">
-                        <input type="file" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" accept=".csv, .xlsx" />
-                        <Upload size={40} className="text-slate-400 mb-3" />
-                        <span className="text-slate-600 font-medium">Kéo thả file CSV/XLSX vào đây hoặc click để chọn</span>
-                        <span className="text-slate-400 text-sm mt-1">Dữ liệu sẽ tự động kiểm tra mô hình Schema</span>
+                    <div className={`border-2 border-dashed border-slate-300 rounded-xl p-10 flex flex-col items-center justify-center bg-slate-50 hover:bg-slate-100 transition-colors relative ${isUploading ? 'opacity-50 pointer-events-none' : 'cursor-pointer'}`}>
+                        <input type="file" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" accept=".csv, .xlsx" onChange={handleFileUpload} disabled={isUploading} />
+                        {isUploading ? (
+                            <div className="flex flex-col items-center">
+                                <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-3"></div>
+                                <span className="text-blue-600 font-medium">Đang xử lý nạp dữ liệu...</span>
+                            </div>
+                        ) : (
+                            <>
+                                <Upload size={40} className="text-slate-400 mb-3" />
+                                <span className="text-slate-600 font-medium">Kéo thả file CSV/XLSX vào đây hoặc click để chọn</span>
+                                <span className="text-slate-400 text-sm mt-1">Dữ liệu sẽ tự động kiểm tra mô hình Schema</span>
+                            </>
+                        )}
                     </div>
                 </div>
 
