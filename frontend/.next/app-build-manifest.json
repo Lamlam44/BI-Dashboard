@@ -16,15 +16,10 @@
       "static/chunks/main-app.js",
       "static/chunks/app/dashboard/page.js"
     ],
-    "/forecasting/page": [
+    "/item-trends/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/forecasting/page.js"
-    ],
-    "/data-management/page": [
-      "static/chunks/webpack.js",
-      "static/chunks/main-app.js",
-      "static/chunks/app/data-management/page.js"
+      "static/chunks/app/item-trends/page.js"
     ]
   }
 }
