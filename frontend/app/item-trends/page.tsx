@@ -63,7 +63,7 @@ const ItemTrends = () => {
         <StatsCards selectedYear={appliedYear} />
 
         {/* CUSTOMER SEGMENT */}
-        <CustomerChart />
+        <CustomerChart selectedYear={appliedYear} />
 
         {/* TREND + PROMOTION */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

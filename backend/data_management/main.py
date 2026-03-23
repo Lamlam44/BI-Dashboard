@@ -10,12 +10,18 @@ import os
 from datetime import datetime
 import shutil
 import io
+from sqlalchemy import text
 
 from .analytics import router as analytics_router
+from db_utils import get_engine, serialize_payload
+from db_migration import run_migration
 
 
 
-from dm_config import DATA_DIR, BACKUP_DIR, SCHEMA_FILE, API_HOST, API_PORT
+try:
+    from dm_config import BACKUP_DIR, SCHEMA_FILE, API_HOST, API_PORT
+except ImportError:
+    from .dm_config import BACKUP_DIR, SCHEMA_FILE, API_HOST, API_PORT
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -29,6 +35,50 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup_event():
+    run_migration()
+    logger.info("Data Management database migration checked.")
+
+
+def _sanitize_df(df: pd.DataFrame) -> pd.DataFrame:
+    return df.where(pd.notna(df), None)
+
+
+def _fetch_table_columns(table_name: str) -> List[str]:
+    sql = """
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE()
+      AND table_name = :table_name
+    ORDER BY ordinal_position
+    """
+    engine = get_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(text(sql), {"table_name": table_name}).mappings().all()
+    return [row["column_name"] for row in rows]
+
+
+def _bulk_upsert(table_name: str, rows: List[Dict[str, Any]], primary_keys: List[str]) -> int:
+    if not rows:
+        return 0
+
+    columns = list(rows[0].keys())
+    placeholders = ", ".join(f":{col}" for col in columns)
+    update_cols = [col for col in columns if col not in primary_keys]
+    update_clause = ", ".join(f"{col} = VALUES({col})" for col in update_cols)
+
+    if update_clause:
+        sql = f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders}) ON DUPLICATE KEY UPDATE {update_clause}"
+    else:
+        sql = f"INSERT IGNORE INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
+
+    engine = get_engine()
+    with engine.begin() as conn:
+        result = conn.execute(text(sql), rows)
+    return int(result.rowcount or 0)
 
 def load_schema():
     with open(SCHEMA_FILE, "r", encoding="utf-8") as f:
@@ -108,25 +158,23 @@ async def ingest_data(table_name: str = Form(...), file: UploadFile = File(...))
     else:
         new_df = pd.read_excel(io.BytesIO(contents))
         
-    file_path = DATA_DIR / f"{table_name}.csv"
-    
-    # Backup existing
-    if file_path.exists():
-        backup_name = f"{table_name}_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        shutil.copy2(file_path, BACKUP_DIR / backup_name)
-        
-        # Merge logic
-        old_df = pd.read_csv(file_path)
-        combined = pd.concat([old_df, new_df], ignore_index=True)
-        if primary_keys:
-            combined = combined.drop_duplicates(subset=primary_keys, keep='last')
-        combined.to_csv(file_path, index=False)
-        return {"message": f"Appended and deduplicated. Rows: {len(combined)}"}
-    else:
-        if primary_keys:
-            new_df = new_df.drop_duplicates(subset=primary_keys, keep='last')
-        new_df.to_csv(file_path, index=False)
-        return {"message": f"Created new file. Rows: {len(new_df)}"}
+    table_columns = _fetch_table_columns(table_name)
+    if not table_columns:
+        raise HTTPException(status_code=404, detail=f"MySQL table '{table_name}' not found")
+
+    valid_columns = [col for col in new_df.columns if col in table_columns]
+    if not valid_columns:
+        raise HTTPException(status_code=400, detail="No valid columns found for target table")
+
+    db_df = _sanitize_df(new_df[valid_columns].copy())
+    if primary_keys:
+        primary_in_df = [pk for pk in primary_keys if pk in db_df.columns]
+        if primary_in_df:
+            db_df = db_df.drop_duplicates(subset=primary_in_df, keep="last")
+
+    rows = db_df.to_dict(orient="records")
+    affected_rows = _bulk_upsert(table_name, rows, primary_keys)
+    return {"message": f"Ingested into MySQL table '{table_name}'. Affected rows: {affected_rows}"}
 
 class PurgeRequest(BaseModel):
     table_name: str
@@ -142,53 +190,51 @@ def purge_data(request: PurgeRequest):
         raise HTTPException(status_code=404, detail="Table schema not found")
         
     schema = schemas[table_name]
-    file_path = DATA_DIR / f"{table_name}.csv"
-    
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail="Data file not found")
-        
-    df = pd.read_csv(file_path)
-    initial_len = len(df)
-    
-    # Backup
-    backup_name = f"{table_name}_prepurge_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    shutil.copy2(file_path, BACKUP_DIR / backup_name)
-    
+    backup_table = f"backup_{table_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    conditions = ["1=1"]
+    params: Dict[str, Any] = {}
+
     if schema["deletion_strategy"] == "DATE_RANGE":
-        # Assuming DateKey exists
-        df['DateKey'] = pd.to_datetime(df['DateKey'])
-        condition = pd.Series(True, index=df.index)
-        
         if request.start_date:
-            condition = condition & (df['DateKey'] >= pd.to_datetime(request.start_date))
+            conditions.append("DateKey >= :start_date")
+            params["start_date"] = request.start_date
         if request.end_date:
-            condition = condition & (df['DateKey'] <= pd.to_datetime(request.end_date))
-            
-        df = df[~condition] # keep rows that DO NOT match the purge condition
-        
-    elif schema["deletion_strategy"] == "CATEGORY":
-        # In DimProduct we have ClassName or BrandName, assume BrandName for now if Category not explicit
-        if request.category and 'BrandName' in df.columns:
-            df = df[df['BrandName'] != request.category]
-            
-    df.to_csv(file_path, index=False)
-    
+            conditions.append("DateKey <= :end_date")
+            params["end_date"] = request.end_date
+    elif schema["deletion_strategy"] == "CATEGORY" and request.category:
+        conditions.append("BrandName = :category")
+        params["category"] = request.category
+
+    where_clause = " AND ".join(conditions)
+    engine = get_engine()
+
+    with engine.begin() as conn:
+        total_before = conn.execute(text(f"SELECT COUNT(*) AS c FROM {table_name}")).scalar() or 0
+
+        conn.execute(text(f"CREATE TABLE {backup_table} AS SELECT * FROM {table_name} WHERE {where_clause}"), params)
+        conn.execute(text(f"DELETE FROM {table_name} WHERE {where_clause}"), params)
+
+        total_after = conn.execute(text(f"SELECT COUNT(*) AS c FROM {table_name}")).scalar() or 0
+
     return {
         "message": "Data purged successfully",
-        "deleted_rows": initial_len - len(df),
-        "remaining_rows": len(df)
+        "backup_table": backup_table,
+        "deleted_rows": int(total_before - total_after),
+        "remaining_rows": int(total_after),
     }
 
 @app.get("/categories/{table_name}")
 def get_categories(table_name: str):
-    file_path = DATA_DIR / f"{table_name}.csv"
-    if not file_path.exists():
+    engine = get_engine()
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(f"SELECT DISTINCT BrandName FROM {table_name} WHERE BrandName IS NOT NULL ORDER BY BrandName")
+            ).mappings().all()
+        return [row["BrandName"] for row in rows]
+    except Exception:
         return []
-    df = pd.read_csv(file_path)
-    if 'BrandName' in df.columns:
-        return df['BrandName'].dropna().unique().tolist()
-    return []
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host=API_HOST, port=API_PORT, reload=True)
+    uvicorn.run("data_management.main:app", host=API_HOST, port=API_PORT, reload=True)

@@ -13,9 +13,10 @@ const apiCache: Record<string, any> = {};
 export default function StatsCards({ selectedYear }: Props) {
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    let url = 'http://127.0.0.1:8003/api/summary-stats';
+    let url = 'http://127.0.0.1:8000/trends/api/summary-stats';
     if (selectedYear !== 'ALL') {
       url += `?start_date=${selectedYear}-01-01&end_date=${selectedYear}-12-31`;
     }
@@ -24,12 +25,14 @@ export default function StatsCards({ selectedYear }: Props) {
     // Nếu url này đã có trong sổ tay, lấy ra dùng luôn và DỪNG LẠI (return)
     if (apiCache[url]) {
       setStats(apiCache[url]);
+      setErrorMsg(null);
       setLoading(false);
       return; 
     }
 
     // BƯỚC 2: NẾU CHƯA CÓ TRONG SỔ, MỚI BẬT LOADING VÀ GỌI API
     setLoading(true);
+    setErrorMsg(null);
     axios.get(url)
       .then(res => {
         // Ghi chép kết quả mới lấy được vào sổ tay để lần sau dùng
@@ -40,12 +43,37 @@ export default function StatsCards({ selectedYear }: Props) {
       })
       .catch(err => {
         console.error(err);
+        setErrorMsg('Khong the tai du lieu tong quan.');
         setLoading(false);
       });
       
   }, [selectedYear]);
 
-  if (!stats) return null;
+  if (errorMsg) {
+    return (
+      <div className="w-full max-w-5xl p-4 rounded-xl border border-red-200 bg-red-50 text-red-700">
+        {errorMsg}
+      </div>
+    );
+  }
+
+  if (loading && !stats) {
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-5xl mb-12">
+        <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-blue-500 text-gray-400">Dang tai...</div>
+        <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-green-500 text-gray-400">Dang tai...</div>
+        <div className="bg-white p-6 rounded-2xl shadow-sm border-l-4 border-purple-500 text-gray-400">Dang tai...</div>
+      </div>
+    );
+  }
+
+  if (!stats) {
+    return (
+      <div className="w-full max-w-5xl p-4 rounded-xl border border-amber-200 bg-amber-50 text-amber-700">
+        Chua co du lieu tong quan cho bo loc nay.
+      </div>
+    );
+  }
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-5xl mb-12">

@@ -1,211 +1,316 @@
 from fastapi import APIRouter
-import pandas as pd
-import time
 from typing import Optional
-from pathlib import Path
 
-# Import DATA_DIR dùng chung
-from dm_config import DATA_DIR
+from db_utils import (
+    build_date_filter,
+    fetch_all,
+    fetch_one,
+    serialize_payload,
+    table_exists,
+)
 
 router = APIRouter()
 
-# ==============================
-# LOAD DATA 1 LẦN (RAM)
-# ==============================
-print("🚀 [Analytics] Đang nạp dữ liệu vào RAM...")
-start_time = time.time()
 
-# Paths
-FACT_SALES_PATH = DATA_DIR / "FactSales.csv"
-FACT_ONLINE_PATH = DATA_DIR / "FactOnlineSales.csv"
-DIM_PRODUCT_PATH = DATA_DIR / "DimProduct.csv"
-DIM_PROMO_PATH = DATA_DIR / "DimPromotion.csv"
-DIM_SUBCAT_PATH = DATA_DIR / "DimProductSubcategory.csv"
-DIM_CUST_PATH = DATA_DIR / "DimCustomer.csv"
-DIM_GEO_PATH = DATA_DIR / "DimGeography.csv"
-AI_RESULT_PATH = DATA_DIR / "Customer_Segments_Final.csv"
+def _fallback_customer_segments(start_date: Optional[str] = None, end_date: Optional[str] = None):
+    where_clause, params = build_date_filter(start_date, end_date, alias="s")
+    rows = fetch_all(
+        f"""
+        WITH customer_sales AS (
+            SELECT s.CustomerKey, SUM(s.SalesAmount) AS monetary
+            FROM FactOnlineSales s
+            WHERE {where_clause}
+            GROUP BY s.CustomerKey
+        ),
+        ranked AS (
+            SELECT
+                CustomerKey,
+                NTILE(3) OVER (ORDER BY monetary DESC) AS spend_tier
+            FROM customer_sales
+        )
+        SELECT
+            CASE spend_tier
+                WHEN 1 THEN 'High Value'
+                WHEN 2 THEN 'Mid Value'
+                ELSE 'Low Value'
+            END AS Segment,
+            COUNT(*) AS total
+        FROM ranked
+        GROUP BY spend_tier
+        ORDER BY spend_tier
+        """,
+        params,
+    )
+    return rows
 
-# Load Dimension
-df_prod = pd.read_csv(DIM_PRODUCT_PATH, encoding='latin1')
-df_promo = pd.read_csv(DIM_PROMO_PATH, encoding='latin1')
-df_subcat = pd.read_csv(DIM_SUBCAT_PATH, encoding='latin1')
-df_cust = pd.read_csv(DIM_CUST_PATH, encoding='latin1')
-df_geo = pd.read_csv(DIM_GEO_PATH, encoding='latin1')
-df_ai = pd.read_csv(AI_RESULT_PATH)
-
-# Load Fact
-common_cols = ['ProductKey', 'PromotionKey', 'SalesQuantity', 'SalesAmount', 'DateKey']
-df_off = pd.read_csv(FACT_SALES_PATH, usecols=common_cols)
-df_on = pd.read_csv(FACT_ONLINE_PATH, usecols=common_cols + ['CustomerKey'])
-
-# Combine
-DF_COMBINED = pd.concat([df_off[common_cols], df_on[common_cols]], ignore_index=True)
-DF_ONLINE_ONLY = df_on
-
-# Convert date (1 lần duy nhất)
-DF_COMBINED['OrderDate'] = pd.to_datetime(DF_COMBINED['DateKey'].astype(str), errors='coerce')
-DF_ONLINE_ONLY['OrderDate'] = pd.to_datetime(DF_ONLINE_ONLY['DateKey'].astype(str), errors='coerce')
-
-end_time = time.time()
-print(f"✅ [Analytics] Loaded {len(DF_COMBINED):,} rows in {end_time - start_time:.2f}s")
-
-
-# ==============================
-# HELPER
-# ==============================
-def filter_by_date(df: pd.DataFrame, start_date: Optional[str] = None, end_date: Optional[str] = None):
-    filtered = df
-    if start_date:
-        filtered = filtered[filtered['OrderDate'] >= pd.to_datetime(start_date)]
-    if end_date:
-        filtered = filtered[filtered['OrderDate'] <= pd.to_datetime(end_date)]
-    return filtered
-
-
-# ==============================
-# APIs
-# ==============================
 
 @router.get("/api/summary-stats")
 def summary_stats(start_date: Optional[str] = None, end_date: Optional[str] = None):
-    df_filtered = filter_by_date(DF_COMBINED, start_date, end_date)
-    total_revenue = df_filtered['SalesAmount'].sum()
+    where_clause, params = build_date_filter(start_date, end_date, alias="s")
+    has_date_filter = bool(start_date or end_date)
 
-    df_on_filtered = filter_by_date(DF_ONLINE_ONLY, start_date, end_date)
-    active_customers = df_on_filtered['CustomerKey'].unique()
+    revenue_row = fetch_one(
+        f"""
+        SELECT COALESCE(SUM(s.total_sales_amount), 0) AS total_revenue
+        FROM summary_daily_sales s
+        WHERE {where_clause}
+        """,
+        params,
+    ) or {"total_revenue": 0}
 
-    df_ai_active = df_ai[df_ai['CustomerKey'].isin(active_customers)]
+    # Fast-path: no date filter means we can avoid expensive DISTINCT scans.
+    if not has_date_filter and table_exists("DimCustomer"):
+        customers_row = fetch_one("SELECT COUNT(*) AS total_customers FROM DimCustomer") or {"total_customers": 0}
+    else:
+        customers_row = fetch_one(
+            f"""
+            SELECT COUNT(DISTINCT s.CustomerKey) AS total_customers
+            FROM FactOnlineSales s
+            WHERE {where_clause}
+            """,
+            params,
+        ) or {"total_customers": 0}
 
-    total_customers = len(active_customers)
-    top_segment = df_ai_active['Segment'].value_counts().idxmax() if not df_ai_active.empty else "N/A"
+    top_segment = "N/A"
+    if table_exists("Customer_Segments_Final"):
+        if not has_date_filter:
+            segment_row = fetch_one(
+                """
+                SELECT cs.Segment, COUNT(*) AS segment_size
+                FROM Customer_Segments_Final cs
+                GROUP BY cs.Segment
+                ORDER BY segment_size DESC
+                LIMIT 1
+                """
+            )
+        else:
+            segment_row = fetch_one(
+                f"""
+                SELECT cs.Segment, COUNT(*) AS segment_size
+                FROM (
+                    SELECT DISTINCT s.CustomerKey
+                    FROM FactOnlineSales s
+                    WHERE {where_clause}
+                ) ac
+                JOIN Customer_Segments_Final cs ON cs.CustomerKey = ac.CustomerKey
+                GROUP BY cs.Segment
+                ORDER BY segment_size DESC
+                LIMIT 1
+                """,
+                params,
+            )
+        if segment_row:
+            top_segment = segment_row["Segment"]
+    else:
+        fallback_rows = _fallback_customer_segments(start_date=start_date, end_date=end_date)
+        if fallback_rows:
+            top_segment = fallback_rows[0]["Segment"]
+
+    total_revenue = float(revenue_row["total_revenue"])
+    total_customers = int(customers_row["total_customers"])
 
     return {
         "total_revenue": f"${total_revenue:,.2f}",
         "total_customers": total_customers,
-        "top_segment": top_segment
+        "top_segment": top_segment,
     }
 
 
 @router.get("/api/sales-by-location")
 def get_sales_by_location(start_date: Optional[str] = None, end_date: Optional[str] = None):
-    try:
-        # 1. Lấy bản sao và lọc theo thời gian
-        df = filter_by_date(DF_ONLINE_ONLY, start_date, end_date).copy()
-        
-        if df.empty:
-            return {"status": "success", "labels": [], "datasets": []}
-            
-        # 2. Tạo nhãn Quý
-        df['Quarter'] = df['OrderDate'].dt.to_period('Q').astype(str)
-        
-        # 3. Merge với Geography để lấy tên quốc gia
-        df_temp = pd.merge(df, df_cust[['CustomerKey', 'GeographyKey']], on='CustomerKey')
-        df_merged = pd.merge(df_temp, df_geo[['GeographyKey', 'RegionCountryName']], on='GeographyKey')
-        
-        # 4. Lấy Top 5 quốc gia doanh thu cao nhất
-        top_5 = df_merged.groupby('RegionCountryName')['SalesAmount'].sum().nlargest(5).index.tolist()
-        df_top = df_merged[df_merged['RegionCountryName'].isin(top_5)]
-        
-        # 5. Gom nhóm theo Quốc gia và Quý
-        grouped = df_top.groupby(['RegionCountryName', 'Quarter'])['SalesAmount'].sum().unstack(fill_value=0)
-        
-        # 6. Sắp xếp
-        quarters = sorted(grouped.columns.tolist())
-        labels = grouped.index.tolist()
-        
-        # Đã bổ sung thêm màu dự phòng nếu số lượng Quý nhiều hơn 4
-        colors = ['#3b82f6', '#a855f7', '#10b981', '#f97316', '#ef4444', '#14b8a6', '#ec4899'] 
-        
-        datasets = []
-        for i, q in enumerate(quarters):
-            datasets.append({
-                "label": q,
-                "data": grouped[q].tolist(),
-                "backgroundColor": colors[i % len(colors)], # Xoay vòng màu an toàn
-                "borderRadius": 5
-            })
-            
-        return {
-            "status": "success",
-            "labels": labels,
-            "datasets": datasets
-        }
-    except Exception as e:
-        import traceback
-        print(traceback.format_exc()) # In lỗi ra console để debug
-        return {"status": "error", "message": str(e)}
+    where_clause, params = build_date_filter(start_date, end_date, alias="s")
+
+    rows = fetch_all(
+        f"""
+        WITH filtered AS (
+            SELECT
+                g.RegionCountryName,
+                CONCAT(YEAR(s.DateKey), '-Q', QUARTER(s.DateKey)) AS Quarter,
+                s.SalesAmount
+            FROM FactOnlineSales s
+            JOIN DimCustomer c ON c.CustomerKey = s.CustomerKey
+            JOIN DimGeography g ON g.GeographyKey = c.GeographyKey
+            WHERE {where_clause}
+        ),
+        top_country AS (
+            SELECT RegionCountryName, SUM(SalesAmount) AS total_sales
+            FROM filtered
+            GROUP BY RegionCountryName
+            ORDER BY total_sales DESC
+            LIMIT 5
+        )
+        SELECT
+            f.RegionCountryName,
+            f.Quarter,
+            SUM(f.SalesAmount) AS SalesAmount
+        FROM filtered f
+        JOIN top_country tc ON tc.RegionCountryName = f.RegionCountryName
+        GROUP BY f.RegionCountryName, f.Quarter
+        ORDER BY f.RegionCountryName, f.Quarter
+        """,
+        params,
+    )
+
+    if not rows:
+        return {"status": "success", "labels": [], "datasets": []}
+
+    pivot = {}
+    quarters = set()
+    for row in rows:
+        country = row["RegionCountryName"]
+        quarter = row["Quarter"]
+        amount = float(row["SalesAmount"])
+        quarters.add(quarter)
+        if country not in pivot:
+            pivot[country] = {}
+        pivot[country][quarter] = amount
+
+    ordered_quarters = sorted(list(quarters))
+    labels = list(pivot.keys())
+    colors = ["#3b82f6", "#a855f7", "#10b981", "#f97316", "#ef4444", "#14b8a6", "#ec4899"]
+
+    datasets = []
+    for idx, quarter in enumerate(ordered_quarters):
+        datasets.append(
+            {
+                "label": quarter,
+                "data": [pivot[country].get(quarter, 0) for country in labels],
+                "backgroundColor": colors[idx % len(colors)],
+                "borderRadius": 5,
+            }
+        )
+
+    return serialize_payload({"status": "success", "labels": labels, "datasets": datasets})
 
 
 @router.get("/api/customer-segments")
 def customer_segments(start_date: Optional[str] = None, end_date: Optional[str] = None):
-    df_on_filtered = filter_by_date(DF_ONLINE_ONLY, start_date, end_date)
-    active_customers = df_on_filtered['CustomerKey'].unique()
+    if table_exists("Customer_Segments_Final"):
+        has_date_filter = bool(start_date or end_date)
+        where_clause, params = build_date_filter(start_date, end_date, alias="s")
 
-    df_filtered = df_ai[df_ai['CustomerKey'].isin(active_customers)] if (start_date or end_date) else df_ai
+        if not has_date_filter:
+            rows = fetch_all(
+                """
+                SELECT cs.Segment, COUNT(*) AS total
+                FROM Customer_Segments_Final cs
+                GROUP BY cs.Segment
+                ORDER BY total DESC
+                """
+            )
+        else:
+            rows = fetch_all(
+                f"""
+                SELECT cs.Segment, COUNT(*) AS total
+                FROM (
+                    SELECT DISTINCT s.CustomerKey
+                    FROM FactOnlineSales s
+                    WHERE {where_clause}
+                ) ac
+                JOIN Customer_Segments_Final cs ON cs.CustomerKey = ac.CustomerKey
+                GROUP BY cs.Segment
+                ORDER BY total DESC
+                """,
+                params,
+            )
+    else:
+        rows = _fallback_customer_segments(start_date=start_date, end_date=end_date)
 
-    segment_counts = df_filtered['Segment'].value_counts()
-
-    return {
-        "labels": segment_counts.index.tolist(),
-        "data": segment_counts.values.tolist()
-    }
+    return serialize_payload(
+        {
+            "labels": [row["Segment"] for row in rows],
+            "data": [row["total"] for row in rows],
+        }
+    )
 
 
 @router.get("/api/trending-products")
 def trending_products(start_date: Optional[str] = None, end_date: Optional[str] = None):
-    df_filtered = filter_by_date(DF_COMBINED, start_date, end_date)
-    if df_filtered.empty:
-        return []
+    where_clause, params = build_date_filter(start_date, end_date, alias="s")
 
-    df_merged = pd.merge(df_filtered, df_prod, on='ProductKey')
-    grouped = df_merged.groupby('ProductName')['SalesQuantity'].sum().reset_index()
+    rows = fetch_all(
+        f"""
+        SELECT
+            p.ProductName,
+            SUM(s.total_sales_quantity) AS SalesQuantity
+        FROM summary_daily_sales s
+        JOIN DimProduct p ON p.ProductKey = s.ProductKey
+        WHERE {where_clause}
+        GROUP BY p.ProductName
+        ORDER BY SalesQuantity DESC
+        LIMIT 10
+        """,
+        params,
+    )
 
-    # BẢN SỬA: Đổi .head(6) thành .head(10) để lấy Top 10
-    top = grouped.sort_values(by='SalesQuantity', ascending=False).head(10)
+    return serialize_payload(
+        [{"name": row["ProductName"], "qty": int(float(row["SalesQuantity"]))} for row in rows]
+    )
 
-    return [{"name": r['ProductName'], "qty": int(r['SalesQuantity'])} for _, r in top.iterrows()]
-# ==============================
-# Promotion Impact
-# ==============================
+
 @router.get("/api/promotion-impact")
 def get_promotion_impact(start_date: Optional[str] = None, end_date: Optional[str] = None):
-    try:
-        df_filtered = filter_by_date(DF_COMBINED, start_date, end_date)
-        
-        if df_filtered.empty:
-            return {"labels": [], "datasets": []}
+    where_clause, params = build_date_filter(start_date, end_date, alias="s")
 
-        df_merged = pd.merge(df_filtered, df_promo, on='PromotionKey', how='inner')
-        df_merged = pd.merge(df_merged, df_prod, on='ProductKey', how='inner')
-        df_merged = pd.merge(df_merged, df_subcat, on='ProductSubcategoryKey', how='inner')
+    rows = fetch_all(
+        f"""
+        SELECT
+            promo.PromotionName,
+            sub.ProductCategoryKey,
+            SUM(s.total_sales_amount) AS SalesAmount
+        FROM summary_daily_sales s
+        JOIN DimPromotion promo ON promo.PromotionKey = s.PromotionKey
+        JOIN DimProduct p ON p.ProductKey = s.ProductKey
+        JOIN DimProductSubcategory sub ON sub.ProductSubcategoryKey = p.ProductSubcategoryKey
+        WHERE {where_clause}
+        GROUP BY promo.PromotionName, sub.ProductCategoryKey
+        ORDER BY promo.PromotionName, sub.ProductCategoryKey
+        """,
+        params,
+    )
 
-        grouped = df_merged.groupby(['PromotionName', 'ProductCategoryKey'])['SalesAmount'].sum().reset_index()
-        promotions = grouped['PromotionName'].unique().tolist()
-        
-        category_mapping = {1: "Audio Devices", 2: "TV & Video", 3: "Computers", 4: "Cameras & Imaging", 
-                            5: "Mobile Phones & Accessories", 6: "Media & Entertainment Content", 
-                            7: "Gaming", 8: "Home Appliances"}
+    if not rows:
+        return {"labels": [], "datasets": []}
 
-        color_mapping = {"Audio Devices": "#3b82f6", "TV & Video": "#8b5cf6", "Computers": "#10b981", 
-                         "Cameras & Imaging": "#f59e0b", "Mobile Phones & Accessories": "#ef4444", 
-                         "Media & Entertainment Content": "#14b8a6", "Gaming": "#ec4899", "Home Appliances": "#eab308"}
+    category_mapping = {
+        1: "Audio Devices",
+        2: "TV & Video",
+        3: "Computers",
+        4: "Cameras & Imaging",
+        5: "Mobile Phones & Accessories",
+        6: "Media & Entertainment Content",
+        7: "Gaming",
+        8: "Home Appliances",
+    }
 
-        datasets = []
-        existing_keys = sorted(grouped['ProductCategoryKey'].unique().tolist())
-        
-        for cat_key in existing_keys:
-            cat_name = category_mapping.get(cat_key, f"Category {cat_key}")
-            cat_data = []
-            for promo in promotions:
-                val = grouped[(grouped['PromotionName'] == promo) & (grouped['ProductCategoryKey'] == cat_key)]['SalesAmount']
-                cat_data.append(float(val.values[0]) if not val.empty else 0)
-                
-            datasets.append({
+    color_mapping = {
+        "Audio Devices": "#3b82f6",
+        "TV & Video": "#8b5cf6",
+        "Computers": "#10b981",
+        "Cameras & Imaging": "#f59e0b",
+        "Mobile Phones & Accessories": "#ef4444",
+        "Media & Entertainment Content": "#14b8a6",
+        "Gaming": "#ec4899",
+        "Home Appliances": "#eab308",
+    }
+
+    promotions = sorted(list({row["PromotionName"] for row in rows}))
+    categories = sorted(list({int(row["ProductCategoryKey"]) for row in rows}))
+
+    lookup = {}
+    for row in rows:
+        lookup[(row["PromotionName"], int(row["ProductCategoryKey"]))] = float(row["SalesAmount"])
+
+    datasets = []
+    for cat in categories:
+        cat_name = category_mapping.get(cat, f"Category {cat}")
+        values = [lookup.get((promotion, cat), 0) for promotion in promotions]
+        datasets.append(
+            {
                 "label": cat_name,
-                "data": cat_data,
-                "backgroundColor": color_mapping.get(cat_name, "#9ca3af")
-            })
+                "data": values,
+                "backgroundColor": color_mapping.get(cat_name, "#9ca3af"),
+            }
+        )
 
-        return {"labels": promotions, "datasets": datasets}
-    except Exception as e:
-        return {"error": str(e)}
+    return serialize_payload({"labels": promotions, "datasets": datasets})

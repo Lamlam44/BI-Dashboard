@@ -17,7 +17,7 @@ export default function PromotionImpactChart({ selectedYear }: Props) {
   const [chartData, setChartData] = useState<any>(null);
 
   useEffect(() => {
-    let url = 'http://127.0.0.1:8003/api/promotion-impact';
+    let url = 'http://127.0.0.1:8000/trends/api/promotion-impact';
     if (selectedYear !== 'ALL') {
       url += `?start_date=${selectedYear}-01-01&end_date=${selectedYear}-12-31`;
     }
@@ -51,7 +51,13 @@ export default function PromotionImpactChart({ selectedYear }: Props) {
     </div>
   );
 
-  if (!chartData.datasets) return null;
+  if (!chartData.datasets || chartData.datasets.length === 0) {
+    return (
+      <div className="w-full p-8 bg-amber-50 rounded-2xl shadow-sm border border-amber-200 flex items-center justify-center h-[600px]">
+        <span className="text-amber-700 font-medium">Khong co du lieu khuyen mai cho bo loc nay.</span>
+      </div>
+    );
+  }
 
   const options = {
     responsive: true,

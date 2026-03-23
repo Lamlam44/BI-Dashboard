@@ -16,7 +16,7 @@ export default function LocationChart({ selectedYear }: Props) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    axios.get('http://127.0.0.1:8003/api/sales-by-location')
+    axios.get('http://127.0.0.1:8000/trends/api/sales-by-location')
       .then(res => {
         if (res.data.status === "error") {
           setErrorMsg(res.data.message);

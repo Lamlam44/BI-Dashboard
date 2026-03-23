@@ -14,16 +14,37 @@ interface ApiResponse {
   data: number[];
 }
 
+interface Props {
+  selectedYear: string;
+}
+
 // Định nghĩa 3 màu chuẩn giống với hình mẫu (Xanh lá, Đỏ, Xanh dương)
 const CHART_COLORS = ['#10b981', '#ef4444', '#3b82f6'];
 
-export default function CustomerChart() {
+export default function CustomerChart({ selectedYear }: Props) {
   const [chartData, setChartData] = useState<ChartData<'doughnut'> | null>(null);
   const [rawData, setRawData] = useState<ApiResponse | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    axios.get<ApiResponse>('http://127.0.0.1:8003/api/customer-segments')
+    let url = 'http://127.0.0.1:8000/trends/api/customer-segments';
+    if (selectedYear !== 'ALL') {
+      url += `?start_date=${selectedYear}-01-01&end_date=${selectedYear}-12-31`;
+    }
+
+    setLoading(true);
+    setErrorMsg(null);
+    setChartData(null);
+
+    axios.get<ApiResponse>(url)
       .then(res => {
+        if (!Array.isArray(res.data.labels) || res.data.labels.length === 0) {
+          setRawData({ labels: [], data: [] });
+          setChartData(null);
+          setLoading(false);
+          return;
+        }
         setRawData(res.data);
         setChartData({
           labels: res.data.labels,
@@ -35,11 +56,34 @@ export default function CustomerChart() {
             hoverOffset: 6
           }],
         });
+        setLoading(false);
       })
-      .catch(err => console.error("Lỗi gọi API:", err));
-  }, []);
+      .catch(err => {
+        console.error("Loi goi API:", err);
+        setErrorMsg('Khong the tai du lieu phan khuc khach hang.');
+        setLoading(false);
+      });
+  }, [selectedYear]);
 
-  if (!chartData || !rawData) return <p className="text-center p-10 text-gray-500">Đang tải dữ liệu từ AI...</p>;
+  if (loading) {
+    return <p className="text-center p-10 text-gray-500">Dang tai du lieu phan khuc...</p>;
+  }
+
+  if (errorMsg) {
+    return (
+      <div className="w-full p-6 bg-red-50 rounded-2xl border border-red-200 text-red-700">
+        {errorMsg}
+      </div>
+    );
+  }
+
+  if (!rawData || rawData.labels.length === 0 || !chartData) {
+    return (
+      <div className="w-full p-6 bg-amber-50 rounded-2xl border border-amber-200 text-amber-700">
+        Khong co du lieu phan khuc khach hang cho bo loc nay.
+      </div>
+    );
+  }
 
   // Tính tổng số lượng khách hàng để chia phần trăm
   const totalCustomers = rawData.data.reduce((acc, curr) => acc + curr, 0);

@@ -17,9 +17,10 @@ const apiCache: Record<string, Product[]> = {};
 export default function TopTrendingList({ selectedYear }: Props) {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    let url = 'http://127.0.0.1:8003/api/trending-products';
+    let url = 'http://127.0.0.1:8000/trends/api/trending-products';
     if (selectedYear !== 'ALL') {
       url += `?start_date=${selectedYear}-01-01&end_date=${selectedYear}-12-31`;
     }
@@ -27,12 +28,14 @@ export default function TopTrendingList({ selectedYear }: Props) {
     // 2. KIỂM TRA CACHE TRƯỚC
     if (apiCache[url]) {
       setProducts(apiCache[url]);
+      setErrorMsg(null);
       setLoading(false);
       return;
     }
 
     // 3. NẾU CHƯA CÓ, GỌI API VÀ LƯU LẠI
     setLoading(true);
+    setErrorMsg(null);
     axios.get(url)
       .then(res => {
         apiCache[url] = res.data; // Ghi chép vào sổ
@@ -41,6 +44,7 @@ export default function TopTrendingList({ selectedYear }: Props) {
       })
       .catch(err => {
         console.error(err);
+        setErrorMsg('Khong the tai danh sach san pham.');
         setLoading(false);
       });
       
@@ -59,6 +63,10 @@ export default function TopTrendingList({ selectedYear }: Props) {
 
       {loading ? (
         <div className="text-center py-10 text-gray-400 font-medium">Đang tải dữ liệu...</div>
+      ) : errorMsg ? (
+        <div className="text-center py-10 text-red-600 font-medium">{errorMsg}</div>
+      ) : products.length === 0 ? (
+        <div className="text-center py-10 text-amber-600 font-medium">Khong co du lieu cho bo loc nay.</div>
       ) : (
         <div className="flex flex-col gap-4">
           {Array.isArray(products) && products.map((item, idx) => (
