@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import DashboardLayout from '../components/DashboardLayout';
 import { Upload, Download, Trash2, Database, AlertCircle, RefreshCw, Eye } from 'lucide-react';
 
-const API_BASE = "http://localhost:8001";
+const API_BASE = "http://127.0.0.1:8000/data";
 
 export default function DataManagementPage() {
     const [schemas, setSchemas] = useState<any>({});

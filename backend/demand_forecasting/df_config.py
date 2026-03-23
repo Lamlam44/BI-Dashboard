@@ -42,3 +42,7 @@ TRAIN_TEST_SPLIT = 0.8
 # API settings
 API_HOST = "0.0.0.0"
 API_PORT = 8000
+
+# Snapshot settings for management-by-exception endpoints.
+# Keep parquet build bounded on very large warehouses.
+PARQUET_LOOKBACK_DAYS = 120
