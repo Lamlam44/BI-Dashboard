@@ -1,4 +1,5 @@
 import logging
+import threading
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +15,6 @@ from sqlalchemy import text
 
 from .analytics import router as analytics_router
 from db_utils import get_engine, serialize_payload
-from db_migration import run_migration
 
 
 
@@ -39,8 +39,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
-    run_migration()
-    logger.info("Data Management database migration checked.")
+    logger.info("Data Management startup ready.")
 
 
 def _sanitize_df(df: pd.DataFrame) -> pd.DataFrame:

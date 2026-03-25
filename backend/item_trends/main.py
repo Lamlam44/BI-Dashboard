@@ -1,5 +1,6 @@
 import logging
 import sys
+import threading
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -10,7 +11,6 @@ backend_root = current_dir.parent
 sys.path.insert(0, str(backend_root))
 
 from data_management.analytics import router as analytics_router
-from db_migration import run_migration
 
 try:
     from it_config import API_HOST, API_PORT
@@ -34,9 +34,7 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
-    # Ensure indexes/views/summary table exist before serving analytics endpoints.
-    run_migration()
-    logger.info("Item Trends database migration checked.")
+    logger.info("Item Trends startup ready.")
 
 
 if __name__ == "__main__":

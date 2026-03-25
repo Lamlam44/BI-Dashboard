@@ -16,6 +16,11 @@
       "static/chunks/main-app.js",
       "static/chunks/app/dashboard/page.js"
     ],
+    "/employee-performance/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/employee-performance/page.js"
+    ],
     "/item-trends/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
@@ -26,10 +31,10 @@
       "static/chunks/main-app.js",
       "static/chunks/app/forecasting/page.js"
     ],
-    "/employee-performance/page": [
+    "/data-management/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/employee-performance/page.js"
+      "static/chunks/app/data-management/page.js"
     ]
   }
 }
