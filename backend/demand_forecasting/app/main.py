@@ -178,8 +178,8 @@ def ensure_cache_ready():
 
 @app.on_event("startup")
 async def startup_event():
-    """Start non-blocking initialization so API boots fast."""
-    _start_background_initialization()
+    """Delay heavy forecasting initialization until first readiness/data request."""
+    logger.info("Forecast startup deferred; initialization will run lazily.")
 
 
 def ensure_initialized():

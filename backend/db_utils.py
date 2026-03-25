@@ -28,7 +28,7 @@ def resolve_database_name() -> str:
         return _RESOLVED_DB_NAME
 
     preferred = [DB_NAME, "retails_datasets", "retails_dataset"]
-    discovery_engine = create_engine(_build_url("information_schema"), pool_pre_ping=True)
+    discovery_engine = create_engine(_build_url("information_schema"), pool_pre_ping=True, connect_args={"connect_timeout": 5})
 
     with discovery_engine.connect() as conn:
         db_rows = conn.execute(
@@ -66,6 +66,7 @@ def get_engine() -> Engine:
             max_overflow=20,
             pool_recycle=3600,
             pool_pre_ping=True,
+            connect_args={"connect_timeout": 5},
         )
     return _ENGINE
 

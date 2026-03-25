@@ -1,4 +1,6 @@
 from fastapi import APIRouter
+import threading
+import time
 from typing import Optional
 
 from db_utils import (
@@ -10,6 +12,32 @@ from db_utils import (
 )
 
 router = APIRouter()
+
+_ANALYTICS_CACHE = {}
+_ANALYTICS_CACHE_LOCK = threading.Lock()
+_ANALYTICS_CACHE_TTL_SECONDS = 15 * 60
+
+
+def _cache_key(endpoint: str, start_date: Optional[str], end_date: Optional[str]) -> str:
+    return f"{endpoint}|{start_date or ''}|{end_date or ''}"
+
+
+def _cache_get(key: str):
+    now = time.time()
+    with _ANALYTICS_CACHE_LOCK:
+        entry = _ANALYTICS_CACHE.get(key)
+        if not entry:
+            return None
+        expires_at, payload = entry
+        if expires_at < now:
+            _ANALYTICS_CACHE.pop(key, None)
+            return None
+        return payload
+
+
+def _cache_set(key: str, payload):
+    with _ANALYTICS_CACHE_LOCK:
+        _ANALYTICS_CACHE[key] = (time.time() + _ANALYTICS_CACHE_TTL_SECONDS, payload)
 
 
 def _fallback_customer_segments(start_date: Optional[str] = None, end_date: Optional[str] = None):
@@ -118,41 +146,48 @@ def summary_stats(start_date: Optional[str] = None, end_date: Optional[str] = No
 
 @router.get("/api/sales-by-location")
 def get_sales_by_location(start_date: Optional[str] = None, end_date: Optional[str] = None):
+    cache_key = _cache_key("sales-by-location", start_date, end_date)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     where_clause, params = build_date_filter(start_date, end_date, alias="s")
 
     rows = fetch_all(
         f"""
-        WITH filtered AS (
+        WITH country_quarter AS (
             SELECT
                 g.RegionCountryName,
                 CONCAT(YEAR(s.DateKey), '-Q', QUARTER(s.DateKey)) AS Quarter,
-                s.SalesAmount
-            FROM FactOnlineSales s
-            JOIN DimCustomer c ON c.CustomerKey = s.CustomerKey
-            JOIN DimGeography g ON g.GeographyKey = c.GeographyKey
+                SUM(s.total_sales_amount) AS SalesAmount
+            FROM summary_daily_sales s
+            JOIN DimStore st ON st.StoreKey = s.StoreKey
+            JOIN DimGeography g ON g.GeographyKey = st.GeographyKey
             WHERE {where_clause}
+            GROUP BY g.RegionCountryName, CONCAT(YEAR(s.DateKey), '-Q', QUARTER(s.DateKey))
         ),
         top_country AS (
             SELECT RegionCountryName, SUM(SalesAmount) AS total_sales
-            FROM filtered
+            FROM country_quarter
             GROUP BY RegionCountryName
             ORDER BY total_sales DESC
             LIMIT 5
         )
         SELECT
-            f.RegionCountryName,
-            f.Quarter,
-            SUM(f.SalesAmount) AS SalesAmount
-        FROM filtered f
-        JOIN top_country tc ON tc.RegionCountryName = f.RegionCountryName
-        GROUP BY f.RegionCountryName, f.Quarter
-        ORDER BY f.RegionCountryName, f.Quarter
+            cq.RegionCountryName,
+            cq.Quarter,
+            cq.SalesAmount
+        FROM country_quarter cq
+        JOIN top_country tc ON tc.RegionCountryName = cq.RegionCountryName
+        ORDER BY cq.RegionCountryName, cq.Quarter
         """,
         params,
     )
 
     if not rows:
-        return {"status": "success", "labels": [], "datasets": []}
+        payload = {"status": "success", "labels": [], "datasets": []}
+        _cache_set(cache_key, payload)
+        return payload
 
     pivot = {}
     quarters = set()
@@ -180,11 +215,18 @@ def get_sales_by_location(start_date: Optional[str] = None, end_date: Optional[s
             }
         )
 
-    return serialize_payload({"status": "success", "labels": labels, "datasets": datasets})
+    payload = serialize_payload({"status": "success", "labels": labels, "datasets": datasets})
+    _cache_set(cache_key, payload)
+    return payload
 
 
 @router.get("/api/customer-segments")
 def customer_segments(start_date: Optional[str] = None, end_date: Optional[str] = None):
+    cache_key = _cache_key("customer-segments", start_date, end_date)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     if table_exists("Customer_Segments_Final"):
         has_date_filter = bool(start_date or end_date)
         where_clause, params = build_date_filter(start_date, end_date, alias="s")
@@ -216,16 +258,23 @@ def customer_segments(start_date: Optional[str] = None, end_date: Optional[str] 
     else:
         rows = _fallback_customer_segments(start_date=start_date, end_date=end_date)
 
-    return serialize_payload(
+    payload = serialize_payload(
         {
             "labels": [row["Segment"] for row in rows],
             "data": [row["total"] for row in rows],
         }
     )
+    _cache_set(cache_key, payload)
+    return payload
 
 
 @router.get("/api/trending-products")
 def trending_products(start_date: Optional[str] = None, end_date: Optional[str] = None):
+    cache_key = _cache_key("trending-products", start_date, end_date)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     where_clause, params = build_date_filter(start_date, end_date, alias="s")
 
     rows = fetch_all(
@@ -243,13 +292,20 @@ def trending_products(start_date: Optional[str] = None, end_date: Optional[str] 
         params,
     )
 
-    return serialize_payload(
+    payload = serialize_payload(
         [{"name": row["ProductName"], "qty": int(float(row["SalesQuantity"]))} for row in rows]
     )
+    _cache_set(cache_key, payload)
+    return payload
 
 
 @router.get("/api/promotion-impact")
 def get_promotion_impact(start_date: Optional[str] = None, end_date: Optional[str] = None):
+    cache_key = _cache_key("promotion-impact", start_date, end_date)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     where_clause, params = build_date_filter(start_date, end_date, alias="s")
 
     rows = fetch_all(
@@ -270,7 +326,9 @@ def get_promotion_impact(start_date: Optional[str] = None, end_date: Optional[st
     )
 
     if not rows:
-        return {"labels": [], "datasets": []}
+        payload = {"labels": [], "datasets": []}
+        _cache_set(cache_key, payload)
+        return payload
 
     category_mapping = {
         1: "Audio Devices",
@@ -313,4 +371,6 @@ def get_promotion_impact(start_date: Optional[str] = None, end_date: Optional[st
             }
         )
 
-    return serialize_payload({"labels": promotions, "datasets": datasets})
+    payload = serialize_payload({"labels": promotions, "datasets": datasets})
+    _cache_set(cache_key, payload)
+    return payload

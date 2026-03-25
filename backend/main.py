@@ -11,11 +11,14 @@ sys.path.insert(0, str(current_dir))
 sys.path.insert(0, str(current_dir / "demand_forecasting"))
 sys.path.insert(0, str(current_dir / "data_management"))
 sys.path.insert(0, str(current_dir / "item_trends"))
+sys.path.insert(0, str(current_dir / "employee_performance"))
 os.chdir(current_dir)
+
 
 from data_management.main import app as data_app
 from demand_forecasting.app.main import app as forecast_app
 from item_trends.main import app as trends_app
+from employee_performance.api import router as employee_performance_router
 
 app = FastAPI(title="Unified BI Dashboard API", version="2.0.0")
 
@@ -27,9 +30,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 app.mount("/data", data_app)
 app.mount("/forecast", forecast_app)
 app.mount("/trends", trends_app)
+app.include_router(employee_performance_router)
 
 
 @app.get("/")
@@ -40,6 +45,7 @@ def root():
             "data_management": "/data",
             "demand_forecasting": "/forecast",
             "item_trends": "/trends",
+            "employee_performance": "/employee-performance",
         },
     }
 

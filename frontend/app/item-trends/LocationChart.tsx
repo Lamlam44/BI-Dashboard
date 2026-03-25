@@ -10,14 +10,32 @@ interface Props {
   selectedYear: string;
 }
 
+const apiCache: Record<string, any> = {};
+
 export default function LocationChart({ selectedYear }: Props) {
   const [allData, setAllData] = useState<any>(null); 
   const [chartData, setChartData] = useState<any>(null); 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    axios.get('http://127.0.0.1:8000/trends/api/sales-by-location')
+    let url = 'http://127.0.0.1:8000/trends/api/sales-by-location';
+    if (selectedYear !== 'ALL') {
+      url += `?start_date=${selectedYear}-01-01&end_date=${selectedYear}-12-31`;
+    }
+
+    if (apiCache[url]) {
+      const cached = apiCache[url];
+      if (cached.status === "error") {
+        setErrorMsg(cached.message || "Khong the tai du lieu khu vuc.");
+      } else {
+        setAllData({ labels: cached.labels, datasets: cached.datasets });
+      }
+      return;
+    }
+
+    axios.get(url)
       .then(res => {
+        apiCache[url] = res.data;
         if (res.data.status === "error") {
           setErrorMsg(res.data.message);
         } else {
@@ -25,7 +43,7 @@ export default function LocationChart({ selectedYear }: Props) {
         }
       })
       .catch(err => setErrorMsg("Lỗi kết nối: " + err.message));
-  }, []);
+  }, [selectedYear]);
 
   useEffect(() => {
     if (allData && selectedYear) {
