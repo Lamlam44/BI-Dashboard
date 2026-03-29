@@ -1,23 +1,20 @@
-import { EmployeeOption, StoreOption } from './types';
+import { EmployeeOption } from './types';
 
 type FiltersBarProps = {
   years: number[];
   months: number[];
-  stores: StoreOption[];
   employees: EmployeeOption[];
   selectedYear: string;
   selectedMonth: string;
-  selectedStoreKey: string;
   selectedEmployeeKey: string;
   onYearChange: (value: string) => void;
   onMonthChange: (value: string) => void;
-  onStoreChange: (value: string) => void;
   onEmployeeChange: (value: string) => void;
 };
 
 export default function FiltersBar(props: FiltersBarProps) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-4 gap-3 bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
       <label className="text-sm text-slate-700">
         <span className="block mb-1 font-medium">Year</span>
         <select
@@ -45,22 +42,6 @@ export default function FiltersBar(props: FiltersBarProps) {
           {props.months.map((month) => (
             <option key={month} value={month}>
               {month}
-            </option>
-          ))}
-        </select>
-      </label>
-
-      <label className="text-sm text-slate-700">
-        <span className="block mb-1 font-medium">Store</span>
-        <select
-          className="w-full rounded-lg border border-slate-300 px-3 py-2"
-          value={props.selectedStoreKey}
-          onChange={(e) => props.onStoreChange(e.target.value)}
-        >
-          <option value="">All</option>
-          {props.stores.map((store) => (
-            <option key={store.store_key} value={store.store_key}>
-              {store.store_name}
             </option>
           ))}
         </select>

@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import DashboardLayout from "../components/DashboardLayout";
+import { useRefresh } from "../components/RefreshProvider";
 import {
   CartesianGrid,
   ComposedChart,
@@ -54,7 +55,7 @@ type ForecastPoint = {
 
 const API_BASE = "http://127.0.0.1:8000/forecast";
 
-async function fetchJsonWithTimeout(url: string, timeoutMs = 20000, options?: RequestInit) {
+async function fetchJsonWithTimeout(url: string, timeoutMs = 600000, options?: RequestInit) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -71,6 +72,7 @@ type ReadyResponse = {
 };
 
 export default function ForecastingClient() {
+  const { refreshTick } = useRefresh();
   const [horizonDays, setHorizonDays] = useState(14);
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
@@ -86,14 +88,14 @@ export default function ForecastingClient() {
   const [error, setError] = useState<string | null>(null);
 
   const loadOverview = async () => {
-    const res = await fetchJsonWithTimeout(`${API_BASE}/overview?horizon_days=${horizonDays}`);
+    const res = await fetchJsonWithTimeout(`${API_BASE}/overview?horizon_days=${horizonDays}`, 600000);
     if (!res.ok) throw new Error("Failed to load overview");
     const data = await res.json();
     setOverview(data);
   };
 
   const loadAlerts = async () => {
-    const res = await fetchJsonWithTimeout(`${API_BASE}/alerts?limit=20&abc_class=A`);
+    const res = await fetchJsonWithTimeout(`${API_BASE}/alerts?limit=20&abc_class=A`, 600000);
     if (!res.ok) throw new Error("Failed to load alerts");
     const data = await res.json();
     setAlerts(data.alerts || []);
@@ -105,14 +107,14 @@ export default function ForecastingClient() {
     if (xyzFilter !== "ALL") params.set("xyz_class", xyzFilter);
     params.set("limit", "300");
 
-    const res = await fetchJsonWithTimeout(`${API_BASE}/bulk/query?${params.toString()}`);
+    const res = await fetchJsonWithTimeout(`${API_BASE}/bulk/query?${params.toString()}`, 600000);
     if (!res.ok) throw new Error("Failed to load bulk list");
     const data = await res.json();
     setBulkRows(data.items || []);
   };
 
   const loadDeepDive = async (productId: number, productName: string) => {
-    const res = await fetchJsonWithTimeout(`${API_BASE}/forecast/${productId}?days_ahead=${horizonDays}`, 45000);
+    const res = await fetchJsonWithTimeout(`${API_BASE}/forecast/${productId}?days_ahead=${horizonDays}`, 600000);
     if (!res.ok) throw new Error("Failed to load deep-dive forecast");
     const payload = await res.json();
     setDeepDiveData(payload.forecast_points || []);
@@ -126,7 +128,7 @@ export default function ForecastingClient() {
 
   const waitForRecalculateDone = async () => {
     for (let i = 0; i < 60; i++) {
-      const readyRes = await fetchJsonWithTimeout(`${API_BASE}/ready`, 10000);
+      const readyRes = await fetchJsonWithTimeout(`${API_BASE}/ready`, 600000);
       if (!readyRes.ok) throw new Error("Failed to check recalculation status");
       const readyData = (await readyRes.json()) as ReadyResponse;
       if (!readyData.recalculate_running) return;
@@ -139,7 +141,7 @@ export default function ForecastingClient() {
     setIsRecalculating(true);
     setError(null);
     try {
-      const res = await fetchJsonWithTimeout(`${API_BASE}/recalculate`, 20000, { method: "POST" });
+      const res = await fetchJsonWithTimeout(`${API_BASE}/recalculate`, 600000, { method: "POST" });
       if (!res.ok) throw new Error("Recalculate failed");
       await waitForRecalculateDone();
       await refreshAllLayers();
@@ -156,7 +158,7 @@ export default function ForecastingClient() {
     refreshAllLayers()
       .catch((e: any) => setError(e.message || "Unknown error"))
       .finally(() => setIsLoadingData(false));
-  }, [horizonDays]);
+  }, [horizonDays, refreshTick]);
 
   useEffect(() => {
     const syncRecalculateState = async () => {
@@ -175,7 +177,7 @@ export default function ForecastingClient() {
 
   useEffect(() => {
     loadBulk().catch((e: any) => setError(e.message || "Unknown error"));
-  }, [abcFilter, xyzFilter]);
+  }, [abcFilter, xyzFilter, refreshTick]);
 
   const chartData = useMemo(
     () =>

@@ -13,6 +13,9 @@ import CustomerChart from './CustomerChart';
 import LocationChart from './LocationChart';
 import TrendingProductsChart from './TrendingProductsChart';
 import PromotionImpactChart from './PromotionImpactChart';
+import RfmSegmentsChart from './RfmSegmentsChart';
+import ProductPerformanceChart from './ProductPerformanceChart';
+import InventoryMetricsChart from './InventoryMetricsChart';
 
 const ItemTrends = () => {
   const [tempYear, setTempYear] = useState<string>('ALL');
@@ -59,20 +62,33 @@ const ItemTrends = () => {
           </button>
         </div>
 
-        {/* STATS */}
-        <StatsCards selectedYear={appliedYear} />
+        {/* ── Phân tích theo năm ── */}
+        <section className="space-y-6">
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-semibold text-slate-800">Phân tích theo năm</h2>
+            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-700">
+              {appliedYear === 'ALL' ? 'Tất cả năm' : `Năm ${appliedYear}`}
+            </span>
+          </div>
+          <StatsCards selectedYear={appliedYear} />
+          <CustomerChart selectedYear={appliedYear} />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <TrendingProductsChart selectedYear={appliedYear} />
+            <PromotionImpactChart selectedYear={appliedYear} />
+          </div>
+          <LocationChart selectedYear={appliedYear} />
+        </section>
 
-        {/* CUSTOMER SEGMENT */}
-        <CustomerChart selectedYear={appliedYear} />
-
-        {/* TREND + PROMOTION */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <TrendingProductsChart selectedYear={appliedYear} />
-          <PromotionImpactChart selectedYear={appliedYear} />
-        </div>
-
-        {/* LOCATION */}
-        <LocationChart selectedYear={appliedYear} />
+        {/* ── Phân tích tổng hợp (không bị ảnh hưởng bởi filter) ── */}
+        <section className="space-y-6">
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-semibold text-slate-800">Phân tích tổng hợp</h2>
+            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-slate-100 text-slate-500">Toàn thời gian</span>
+          </div>
+          <RfmSegmentsChart />
+          <ProductPerformanceChart />
+          <InventoryMetricsChart />
+        </section>
 
       </div>
     </DashboardLayout>

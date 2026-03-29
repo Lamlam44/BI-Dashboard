@@ -4,10 +4,13 @@ import { Chart as ChartJS, ArcElement, Tooltip, Legend, ChartData } from 'chart.
 import { Doughnut } from 'react-chartjs-2';
 import ChartDataLabels from 'chartjs-plugin-datalabels'; // Import Plugin mới
 import axios from 'axios';
+import { useRefresh } from '../components/RefreshProvider';
 
 // Đăng ký các thành phần bao gồm cả ChartDataLabels
 //ChartJS.register(ArcElement, Tooltip, Legend, ChartDataLabels);
 ChartJS.register(ArcElement, Tooltip, Legend);
+
+const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
 
 interface ApiResponse {
   labels: string[];
@@ -22,13 +25,14 @@ interface Props {
 const CHART_COLORS = ['#10b981', '#ef4444', '#3b82f6'];
 
 export default function CustomerChart({ selectedYear }: Props) {
+  const { refreshTick } = useRefresh();
   const [chartData, setChartData] = useState<ChartData<'doughnut'> | null>(null);
   const [rawData, setRawData] = useState<ApiResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    let url = 'http://127.0.0.1:8000/trends/api/customer-segments';
+    let url = `${API}/trends/api/customer-segments`;
     if (selectedYear !== 'ALL') {
       url += `?start_date=${selectedYear}-01-01&end_date=${selectedYear}-12-31`;
     }
@@ -63,7 +67,7 @@ export default function CustomerChart({ selectedYear }: Props) {
         setErrorMsg('Khong the tai du lieu phan khuc khach hang.');
         setLoading(false);
       });
-  }, [selectedYear]);
+  }, [selectedYear, refreshTick]);
 
   if (loading) {
     return <p className="text-center p-10 text-gray-500">Dang tai du lieu phan khuc...</p>;

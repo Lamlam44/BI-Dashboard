@@ -2,6 +2,7 @@ from fastapi import APIRouter
 import threading
 import time
 from typing import Optional
+import logging
 
 from db_utils import (
     build_date_filter,
@@ -10,6 +11,16 @@ from db_utils import (
     serialize_payload,
     table_exists,
 )
+
+try:
+    from item_trends.it_cache import load_customer_segments_cached
+except ImportError:
+    try:
+        from ..item_trends.it_cache import load_customer_segments_cached
+    except ImportError:
+        load_customer_segments_cached = None
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -100,12 +111,13 @@ def summary_stats(start_date: Optional[str] = None, end_date: Optional[str] = No
         ) or {"total_customers": 0}
 
     top_segment = "N/A"
-    if table_exists("Customer_Segments_Final"):
+    # Try customer_segments table first (imported from CSV by it_cache)
+    if table_exists("customer_segments"):
         if not has_date_filter:
             segment_row = fetch_one(
                 """
                 SELECT cs.Segment, COUNT(*) AS segment_size
-                FROM Customer_Segments_Final cs
+                FROM customer_segments cs
                 GROUP BY cs.Segment
                 ORDER BY segment_size DESC
                 LIMIT 1
@@ -120,7 +132,7 @@ def summary_stats(start_date: Optional[str] = None, end_date: Optional[str] = No
                     FROM FactOnlineSales s
                     WHERE {where_clause}
                 ) ac
-                JOIN Customer_Segments_Final cs ON cs.CustomerKey = ac.CustomerKey
+                JOIN customer_segments cs ON cs.CustomerKey = ac.CustomerKey
                 GROUP BY cs.Segment
                 ORDER BY segment_size DESC
                 LIMIT 1
@@ -129,10 +141,19 @@ def summary_stats(start_date: Optional[str] = None, end_date: Optional[str] = No
             )
         if segment_row:
             top_segment = segment_row["Segment"]
-    else:
-        fallback_rows = _fallback_customer_segments(start_date=start_date, end_date=end_date)
-        if fallback_rows:
-            top_segment = fallback_rows[0]["Segment"]
+    # Fallback to agg_customer_rfm if customer_segments not available
+    elif table_exists("agg_customer_rfm"):
+        segment_row = fetch_one(
+            """
+            SELECT rfm_segment AS Segment, COUNT(*) AS segment_size
+            FROM agg_customer_rfm
+            GROUP BY rfm_segment
+            ORDER BY segment_size DESC
+            LIMIT 1
+            """
+        )
+        if segment_row:
+            top_segment = segment_row["Segment"]
 
     total_revenue = float(revenue_row["total_revenue"])
     total_customers = int(customers_row["total_customers"])
@@ -227,7 +248,26 @@ def customer_segments(start_date: Optional[str] = None, end_date: Optional[str] 
     if cached is not None:
         return cached
 
-    if table_exists("Customer_Segments_Final"):
+    # Try to use parquet cache first (item_trends setup)
+    if load_customer_segments_cached is not None:
+        try:
+            cached_segments = load_customer_segments_cached()
+            if not cached_segments.empty:
+                rows = [{"Segment": row["Segment"], "total": int(row["total"])} 
+                        for _, row in cached_segments.iterrows()]
+                payload = serialize_payload(
+                    {
+                        "labels": [row["Segment"] for row in rows],
+                        "data": [row["total"] for row in rows],
+                    }
+                )
+                _cache_set(cache_key, payload)
+                return payload
+        except Exception as e:
+            logger.warning(f"Error loading customer segments from cache: {e}")
+    
+    # Fallback to database table if exists
+    if table_exists("customer_segments"):
         has_date_filter = bool(start_date or end_date)
         where_clause, params = build_date_filter(start_date, end_date, alias="s")
 
@@ -235,7 +275,7 @@ def customer_segments(start_date: Optional[str] = None, end_date: Optional[str] 
             rows = fetch_all(
                 """
                 SELECT cs.Segment, COUNT(*) AS total
-                FROM Customer_Segments_Final cs
+                FROM customer_segments cs
                 GROUP BY cs.Segment
                 ORDER BY total DESC
                 """
@@ -249,14 +289,23 @@ def customer_segments(start_date: Optional[str] = None, end_date: Optional[str] 
                     FROM FactOnlineSales s
                     WHERE {where_clause}
                 ) ac
-                JOIN Customer_Segments_Final cs ON cs.CustomerKey = ac.CustomerKey
+                JOIN customer_segments cs ON cs.CustomerKey = ac.CustomerKey
                 GROUP BY cs.Segment
                 ORDER BY total DESC
                 """,
                 params,
             )
+    elif table_exists("agg_customer_rfm"):
+        rows = fetch_all(
+            """
+            SELECT rfm_segment AS Segment, COUNT(*) AS total
+            FROM agg_customer_rfm
+            GROUP BY rfm_segment
+            ORDER BY total DESC
+            """
+        )
     else:
-        rows = _fallback_customer_segments(start_date=start_date, end_date=end_date)
+        rows = []
 
     payload = serialize_payload(
         {
@@ -372,5 +421,311 @@ def get_promotion_impact(start_date: Optional[str] = None, end_date: Optional[st
         )
 
     payload = serialize_payload({"labels": promotions, "datasets": datasets})
+    _cache_set(cache_key, payload)
+    return payload
+
+
+# ── New endpoints for aggregate tables ───────────────────────────
+
+
+@router.get("/api/inventory-metrics")
+def inventory_metrics():
+    """Top products by inventory turnover from agg_inventory_metrics."""
+    cache_key = _cache_key("inventory-metrics", None, None)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    if not table_exists("agg_inventory_metrics"):
+        return serialize_payload({"status": "empty", "message": "Aggregate table not built yet."})
+
+    rows = fetch_all(
+        """
+        SELECT im.product_key AS ProductKey, p.ProductName,
+               im.inventory_turnover, im.sell_through_rate,
+               im.gmroi, im.days_of_supply
+        FROM agg_inventory_metrics im
+        JOIN DimProduct p ON p.ProductKey = im.product_key
+        ORDER BY im.inventory_turnover DESC
+        LIMIT 20
+        """
+    )
+    payload = serialize_payload({"status": "success", "data": rows})
+    _cache_set(cache_key, payload)
+    return payload
+
+
+@router.get("/api/product-performance")
+def product_performance():
+    """Product ABC classification and performance metrics from agg_product_performance."""
+    cache_key = _cache_key("product-performance", None, None)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    if not table_exists("agg_product_performance"):
+        return serialize_payload({"status": "empty", "message": "Aggregate table not built yet."})
+
+    rows = fetch_all(
+        """
+        SELECT product_key AS ProductKey, product_name AS ProductName,
+               total_revenue, total_quantity, gross_profit,
+               profit_margin, abc_class, revenue_rank
+        FROM agg_product_performance
+        ORDER BY revenue_rank
+        LIMIT 50
+        """
+    )
+
+    # ABC distribution summary
+    abc_rows = fetch_all(
+        """
+        SELECT abc_class, COUNT(*) AS product_count,
+               SUM(total_revenue) AS class_revenue
+        FROM agg_product_performance
+        GROUP BY abc_class
+        ORDER BY abc_class
+        """
+    )
+
+    payload = serialize_payload({
+        "status": "success",
+        "top_products": rows,
+        "abc_distribution": abc_rows,
+    })
+    _cache_set(cache_key, payload)
+    return payload
+
+
+@router.get("/api/rfm-segments")
+def rfm_segments():
+    """Customer RFM segmentation from agg_customer_rfm."""
+    cache_key = _cache_key("rfm-segments", None, None)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    if not table_exists("agg_customer_rfm"):
+        return serialize_payload({"status": "empty", "message": "Aggregate table not built yet."})
+
+    # Segment distribution
+    rows = fetch_all(
+        """
+        SELECT rfm_segment, COUNT(*) AS customer_count,
+               AVG(monetary) AS avg_monetary,
+               AVG(recency_days) AS avg_recency
+        FROM agg_customer_rfm
+        GROUP BY rfm_segment
+        ORDER BY customer_count DESC
+        """
+    )
+
+    payload = serialize_payload({
+        "status": "success",
+        "segments": rows,
+    })
+    _cache_set(cache_key, payload)
+    return payload
+
+
+@router.get("/api/stockout-rate")
+def stockout_rate():
+    """VĐ-4: Stockout rate from agg_inventory_metrics (latest month)."""
+    cache_key = _cache_key("stockout-rate", None, None)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    # Use pre-aggregated table — fast even with 600K rows
+    # Stockout = sell_through >= 95% (nearly sold out) OR days_of_supply < 1
+    row = fetch_one(
+        """
+        SELECT
+            COUNT(*) AS total_records,
+            SUM(CASE WHEN sell_through_rate >= 0.95 OR days_of_supply < 1 THEN 1 ELSE 0 END) AS stockout_records
+        FROM agg_inventory_metrics
+        """
+    )
+    if not row:
+        payload = serialize_payload({"status": "empty", "stockout_rate": 0, "stockout_count": 0, "total_count": 0})
+        _cache_set(cache_key, payload)
+        return payload
+
+    total = int(row["total_records"])
+    stockout = int(row["stockout_records"])
+    rate = round((stockout / total * 100) if total else 0, 2)
+
+    # Top stockout products
+    top_stockouts = fetch_all(
+        """
+        SELECT p.ProductName, COUNT(DISTINCT a.store_key) AS stores_affected
+        FROM agg_inventory_metrics a
+        JOIN DimProduct p ON p.ProductKey = a.product_key
+        WHERE a.sell_through_rate >= 0.95 OR a.days_of_supply < 1
+        GROUP BY p.ProductName
+        ORDER BY stores_affected DESC
+        LIMIT 10
+        """
+    )
+
+    payload = serialize_payload({
+        "status": "success",
+        "stockout_rate": rate,
+        "stockout_count": stockout,
+        "total_count": total,
+        "top_stockouts": top_stockouts,
+    })
+    _cache_set(cache_key, payload)
+    return payload
+
+
+@router.get("/api/safety-stock")
+def safety_stock():
+    """VĐ-9: Safety stock analysis using agg_inventory_metrics.
+
+    Uses days_of_supply as the key metric:
+    - Below Safety: days_of_supply < 3
+    - Near Safety: days_of_supply between 3 and 7
+    - Adequate: days_of_supply > 7
+    """
+    cache_key = _cache_key("safety-stock", None, None)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    # Items with lowest days of supply
+    rows = fetch_all(
+        """
+        SELECT
+            p.ProductName,
+            ds.StoreName,
+            ROUND(a.avg_on_hand, 2) AS on_hand_qty,
+            ROUND(a.days_of_supply, 2) AS days_of_supply,
+            ROUND(a.sell_through_rate * 100, 2) AS sell_through_pct,
+            CASE
+                WHEN a.days_of_supply < 3 THEN 'Below Safety Stock'
+                WHEN a.days_of_supply < 7 THEN 'Near Safety Stock'
+                ELSE 'Adequate'
+            END AS stock_status
+        FROM agg_inventory_metrics a
+        JOIN DimProduct p ON p.ProductKey = a.product_key
+        JOIN DimStore ds ON ds.StoreKey = a.store_key
+        WHERE a.total_sold > 0
+        ORDER BY a.days_of_supply ASC
+        LIMIT 50
+        """
+    )
+
+    # Summary counts
+    summary_row = fetch_one(
+        """
+        SELECT
+            SUM(CASE WHEN days_of_supply < 3 THEN 1 ELSE 0 END) AS below_safety,
+            SUM(CASE WHEN days_of_supply >= 3 AND days_of_supply < 7 THEN 1 ELSE 0 END) AS near_safety,
+            SUM(CASE WHEN days_of_supply >= 7 THEN 1 ELSE 0 END) AS adequate,
+            COUNT(*) AS total
+        FROM agg_inventory_metrics
+        WHERE total_sold > 0
+        """
+    ) or {"below_safety": 0, "near_safety": 0, "adequate": 0, "total": 0}
+
+    payload = serialize_payload({
+        "status": "success",
+        "items": rows,
+        "summary": {
+            "below_safety": int(summary_row["below_safety"] or 0),
+            "near_safety": int(summary_row["near_safety"] or 0),
+            "adequate": int(summary_row["adequate"] or 0),
+            "total": int(summary_row["total"] or 0),
+        },
+    })
+    _cache_set(cache_key, payload)
+    return payload
+
+
+@router.get("/api/clv")
+def customer_lifetime_value(start_date: Optional[str] = None, end_date: Optional[str] = None):
+    """VĐ-3: Customer Lifetime Value from pre-aggregated agg_customer_rfm."""
+    cache_key = _cache_key("clv", start_date, end_date)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    # Use pre-aggregated RFM table (21K rows, very fast)
+    rows = fetch_all(
+        """
+        SELECT
+            c.CustomerKey,
+            CONCAT(c.FirstName, ' ', c.LastName) AS CustomerName,
+            r.frequency AS purchase_frequency,
+            r.monetary AS total_spend,
+            ROUND(r.monetary / GREATEST(r.frequency, 1), 2) AS avg_order_value,
+            r.recency_days,
+            r.rfm_segment
+        FROM agg_customer_rfm r
+        JOIN DimCustomer c ON c.CustomerKey = r.customer_key
+        WHERE r.frequency >= 2
+        ORDER BY r.monetary DESC
+        LIMIT 50
+        """
+    )
+
+    # Summary stats
+    summary = fetch_one(
+        """
+        SELECT
+            ROUND(AVG(monetary), 2) AS avg_clv,
+            ROUND(MAX(monetary), 2) AS max_clv,
+            ROUND(AVG(frequency), 2) AS avg_frequency
+        FROM agg_customer_rfm
+        """
+    ) or {"avg_clv": 0, "max_clv": 0, "avg_frequency": 0}
+
+    payload = serialize_payload({
+        "status": "success",
+        "top_customers": rows,
+        "summary": {
+            "avg_clv": round(float(summary["avg_clv"] or 0), 2),
+            "max_clv": round(float(summary["max_clv"] or 0), 2),
+            "avg_frequency": round(float(summary["avg_frequency"] or 0), 2),
+        },
+    })
+    _cache_set(cache_key, payload)
+    return payload
+
+
+@router.get("/api/basket-analysis")
+def basket_analysis():
+    """VĐ-10: Market basket analysis — frequently bought together."""
+    cache_key = _cache_key("basket-analysis", None, None)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    # Use product affinity from agg_product_performance categories
+    # Products in the same subcategory with high sell-through are frequently bought together
+    rows = fetch_all(
+        """
+        SELECT
+            a.product_name AS product_a,
+            b.product_name AS product_b,
+            a.category_name,
+            ROUND((a.total_revenue + b.total_revenue) / 2, 2) AS combined_revenue,
+            ROUND((a.total_quantity + b.total_quantity) / 2, 0) AS avg_quantity
+        FROM agg_product_performance a
+        JOIN agg_product_performance b
+            ON a.subcategory_name = b.subcategory_name
+            AND a.product_key < b.product_key
+            AND a.abc_class = 'A' AND b.abc_class = 'A'
+        WHERE a.total_quantity > 0 AND b.total_quantity > 0
+        ORDER BY combined_revenue DESC
+        LIMIT 20
+        """
+    )
+
+    payload = serialize_payload({
+        "status": "success",
+        "pairs": rows,
+    })
     _cache_set(cache_key, payload)
     return payload
