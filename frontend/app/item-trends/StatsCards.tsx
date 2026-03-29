@@ -1,43 +1,30 @@
 'use client';
 import { useEffect, useState } from 'react';
 import axios from 'axios';
+import { useRefresh } from '../components/RefreshProvider';
+
+const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
 
 interface Props {
   selectedYear: string;
 }
 
-// TẠO CUỐN SỔ TAY GHI NHỚ (Biến toàn cục của file này)
-// Nó sẽ lưu trữ theo cấu trúc: { "url_nam_2007": data, "url_nam_2008": data }
-const apiCache: Record<string, any> = {};
-
 export default function StatsCards({ selectedYear }: Props) {
+  const { refreshTick } = useRefresh();
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    let url = 'http://127.0.0.1:8000/trends/api/summary-stats';
+    let url = `${API}/trends/api/summary-stats`;
     if (selectedYear !== 'ALL') {
       url += `?start_date=${selectedYear}-01-01&end_date=${selectedYear}-12-31`;
     }
 
-    // BƯỚC 1: KIỂM TRA SỔ TAY TRƯỚC
-    // Nếu url này đã có trong sổ tay, lấy ra dùng luôn và DỪNG LẠI (return)
-    if (apiCache[url]) {
-      setStats(apiCache[url]);
-      setErrorMsg(null);
-      setLoading(false);
-      return; 
-    }
-
-    // BƯỚC 2: NẾU CHƯA CÓ TRONG SỔ, MỚI BẬT LOADING VÀ GỌI API
     setLoading(true);
     setErrorMsg(null);
     axios.get(url)
       .then(res => {
-        // Ghi chép kết quả mới lấy được vào sổ tay để lần sau dùng
-        apiCache[url] = res.data; 
-        
         setStats(res.data);
         setLoading(false);
       })
@@ -47,7 +34,7 @@ export default function StatsCards({ selectedYear }: Props) {
         setLoading(false);
       });
       
-  }, [selectedYear]);
+  }, [selectedYear, refreshTick]);
 
   if (errorMsg) {
     return (

@@ -1,9 +1,43 @@
+import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from db_utils import fetch_all, fetch_one
 except ImportError:
     from ..db_utils import fetch_all, fetch_one
+
+
+_CACHE_TTL_SECONDS = 10 * 60
+_EMP_PERF_CACHE: Dict[str, Tuple[float, Any]] = {}
+_EMP_PERF_CACHE_LOCK = threading.Lock()
+_LATEST_YEAR_CACHE: Tuple[float, Optional[int]] = (0, None)
+
+
+def _cache_key(endpoint: str, **filters: Any) -> str:
+    parts = [endpoint]
+    for key in sorted(filters.keys()):
+        value = filters[key]
+        parts.append(f"{key}={value if value is not None else ''}")
+    return "|".join(parts)
+
+
+def _cache_get(key: str):
+    now = time.time()
+    with _EMP_PERF_CACHE_LOCK:
+        entry = _EMP_PERF_CACHE.get(key)
+        if not entry:
+            return None
+        expires_at, payload = entry
+        if expires_at < now:
+            _EMP_PERF_CACHE.pop(key, None)
+            return None
+        return payload
+
+
+def _cache_set(key: str, payload: Any) -> None:
+    with _EMP_PERF_CACHE_LOCK:
+        _EMP_PERF_CACHE[key] = (time.time() + _CACHE_TTL_SECONDS, payload)
 
 
 def _normalize_int(value: Optional[int]) -> Optional[int]:
@@ -17,6 +51,12 @@ def _resolve_year(year: Optional[int]) -> Optional[int]:
     if explicit is not None:
         return explicit
 
+    now = time.time()
+    global _LATEST_YEAR_CACHE
+    cached_at, cached_value = _LATEST_YEAR_CACHE
+    if cached_value is not None and (now - cached_at) < _CACHE_TTL_SECONDS:
+        return cached_value
+
     row = fetch_one(
         """
         SELECT CAST(MAX(d.CalendarYear) AS SIGNED) AS latest_year
@@ -27,7 +67,9 @@ def _resolve_year(year: Optional[int]) -> Optional[int]:
     )
     if not row:
         return None
-    return row.get("latest_year")
+    latest_year = row.get("latest_year")
+    _LATEST_YEAR_CACHE = (now, latest_year)
+    return latest_year
 
 
 def _manager_filters_sql(
@@ -71,24 +113,42 @@ def _manager_monthly_subquery(where_clause: str) -> str:
         d.CalendarYear AS year,
         d.MonthNumber AS month,
         SUM(COALESCE(sds.total_sales_amount, 0)) AS total_sales_amount,
-        0 AS total_return_amount,
-        SUM(COALESCE(sds.total_sales_amount, 0)) AS net_sales,
-        0 AS total_cost,
-        0 AS profit_margin,
+        COALESCE(smc.total_return_amount, 0) AS total_return_amount,
+        SUM(COALESCE(sds.total_sales_amount, 0)) - COALESCE(smc.total_return_amount, 0) AS net_sales,
+        COALESCE(smc.total_cost, 0) AS total_cost,
+        CASE WHEN SUM(COALESCE(sds.total_sales_amount, 0)) > 0
+             THEN (SUM(COALESCE(sds.total_sales_amount, 0)) - COALESCE(smc.total_cost, 0))
+                  / SUM(COALESCE(sds.total_sales_amount, 0)) * 100
+             ELSE 0
+        END AS profit_margin,
         SUM(COALESCE(sds.total_sales_quantity, 0)) AS total_sales_quantity,
-        0 AS total_return_quantity,
-        0 AS return_rate,
+        COALESCE(smc.total_return_quantity, 0) AS total_return_quantity,
+        CASE WHEN SUM(COALESCE(sds.total_sales_quantity, 0)) > 0
+             THEN COALESCE(smc.total_return_quantity, 0)
+                  / SUM(COALESCE(sds.total_sales_quantity, 0)) * 100
+             ELSE 0
+        END AS return_rate,
         COUNT(*) AS order_count,
         AVG(COALESCE(sds.total_sales_amount, 0)) AS avg_ticket_size
     FROM summary_daily_sales sds
     JOIN DimStore ds ON ds.StoreKey = sds.StoreKey
     JOIN DimDate d ON d.DateKey = sds.DateKey
+    LEFT JOIN agg_store_monthly_costs smc
+        ON smc.store_key = sds.StoreKey
+       AND smc.calendar_year = d.CalendarYear
+       AND smc.month_number = d.MonthNumber
     WHERE {where_clause}
-    GROUP BY ds.StoreManager, sds.StoreKey, d.CalendarYear, d.MonthNumber
+    GROUP BY ds.StoreManager, sds.StoreKey, d.CalendarYear, d.MonthNumber,
+             smc.total_return_amount, smc.total_cost, smc.total_return_quantity
     """
 
 
 def get_filters() -> Dict[str, Any]:
+    cache_key = _cache_key("filters")
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     years = fetch_all(
         """
         SELECT DISTINCT CAST(d.CalendarYear AS SIGNED) AS year
@@ -144,12 +204,14 @@ def get_filters() -> Dict[str, Any]:
             }
         )
 
-    return {
+    payload = {
         "years": [int(row["year"]) for row in years if row.get("year") is not None],
         "months": [int(row["month"]) for row in months if row.get("month") is not None],
         "stores": stores,
         "employees": normalized_employees,
     }
+    _cache_set(cache_key, payload)
+    return payload
 
 
 def get_dashboard(
@@ -158,6 +220,17 @@ def get_dashboard(
     employee_key: Optional[int] = None,
     store_key: Optional[int] = None,
 ) -> Dict[str, Any]:
+    cache_key = _cache_key(
+        "dashboard",
+        year=year,
+        month=month,
+        employee_key=employee_key,
+        store_key=store_key,
+    )
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     resolved_year = _resolve_year(year)
     where_clause, params = _manager_filters_sql(resolved_year, month, employee_key, store_key)
     manager_monthly_sql = _manager_monthly_subquery(where_clause)
@@ -212,7 +285,8 @@ def get_dashboard(
     """
 
     kpis = fetch_one(kpi_sql, params) or {}
-    top_performer = fetch_one(top_sql, params)
+    has_data = int(kpis.get("employee_count") or 0) > 0
+    top_performer = fetch_one(top_sql, params) if has_data else None
     company_avg = fetch_one(company_avg_sql, company_params) or {}
 
     comparison = {
@@ -256,7 +330,7 @@ def get_dashboard(
         },
     ]
 
-    return {
+    payload = {
         "filters": {
             "year": resolved_year,
             "month": month,
@@ -270,11 +344,23 @@ def get_dashboard(
     }
 
 
+    _cache_set(cache_key, payload)
+    return payload
 def get_trend(
     year: Optional[int] = None,
     employee_key: Optional[int] = None,
     store_key: Optional[int] = None,
 ) -> Dict[str, Any]:
+    cache_key = _cache_key(
+        "trend",
+        year=year,
+        employee_key=employee_key,
+        store_key=store_key,
+    )
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     resolved_year = _resolve_year(year)
     where_clause, params = _manager_filters_sql(resolved_year, None, employee_key, store_key)
     manager_monthly_sql = _manager_monthly_subquery(where_clause)
@@ -296,7 +382,7 @@ def get_trend(
     """
 
     rows = fetch_all(sql, params)
-    return {
+    payload = {
         "filters": {
             "year": resolved_year,
             "employee_key": employee_key,
@@ -304,6 +390,8 @@ def get_trend(
         },
         "rows": rows,
     }
+    _cache_set(cache_key, payload)
+    return payload
 
 
 def get_leaderboard(
@@ -312,6 +400,17 @@ def get_leaderboard(
     store_key: Optional[int] = None,
     top_n: int = 10,
 ) -> Dict[str, Any]:
+    cache_key = _cache_key(
+        "leaderboard",
+        year=year,
+        month=month,
+        store_key=store_key,
+        top_n=top_n,
+    )
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     resolved_year = _resolve_year(year)
     where_clause, params = _manager_filters_sql(resolved_year, month, None, store_key)
     manager_monthly_sql = _manager_monthly_subquery(where_clause)
@@ -343,7 +442,7 @@ def get_leaderboard(
         if not row.get("employee_name"):
             row["employee_name"] = f"Employee {row.get('employee_key')}"
 
-    return {
+    payload = {
         "filters": {
             "year": resolved_year,
             "month": month,
@@ -352,6 +451,8 @@ def get_leaderboard(
         },
         "rows": rows,
     }
+    _cache_set(cache_key, payload)
+    return payload
 
 
 def get_scatter(
@@ -359,6 +460,16 @@ def get_scatter(
     month: Optional[int] = None,
     store_key: Optional[int] = None,
 ) -> Dict[str, Any]:
+    cache_key = _cache_key(
+        "scatter",
+        year=year,
+        month=month,
+        store_key=store_key,
+    )
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
     resolved_year = _resolve_year(year)
     where_clause, params = _manager_filters_sql(resolved_year, month, None, store_key)
     manager_monthly_sql = _manager_monthly_subquery(where_clause)
@@ -386,10 +497,12 @@ def get_scatter(
         if not row.get("employee_name"):
             row["employee_name"] = f"Employee {row.get('employee_key')}"
 
-    return {
+    payload = {
         "filters": {"year": resolved_year, "month": month, "store_key": store_key},
         "rows": rows,
     }
+    _cache_set(cache_key, payload)
+    return payload
 
 
 def health_check() -> Dict[str, Any]:
@@ -409,3 +522,59 @@ def health_check() -> Dict[str, Any]:
         "db_ok": bool(row.get("ok") == 1),
         "required_tables_available": bool(table_state and table_state.get("exists_flag") == 1),
     }
+
+
+def get_sales_per_employee(
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    store_key: Optional[int] = None,
+) -> Dict[str, Any]:
+    """VĐ-7: Sales per employee = Net Sales / EmployeeCount per store."""
+    cache_key = _cache_key("sales-per-employee", year=year, month=month, store_key=store_key)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    resolved_year = _resolve_year(year)
+    clauses: List[str] = ["ds.EmployeeCount > 0"]
+    params: Dict[str, Any] = {}
+    if resolved_year is not None:
+        clauses.append("d.CalendarYear = :year")
+        params["year"] = resolved_year
+    if month is not None:
+        clauses.append("d.MonthNumber = :month")
+        params["month"] = int(month)
+    if store_key is not None:
+        clauses.append("sds.StoreKey = :store_key")
+        params["store_key"] = int(store_key)
+
+    where = " AND ".join(clauses)
+
+    rows = fetch_all(
+        f"""
+        SELECT
+            ds.StoreKey,
+            ds.StoreName,
+            ds.EmployeeCount,
+            SUM(sds.total_sales_amount)
+              - COALESCE(SUM(sds.total_return_amount), 0)
+              - COALESCE(SUM(sds.total_discount_amount), 0) AS net_sales,
+            (SUM(sds.total_sales_amount)
+              - COALESCE(SUM(sds.total_return_amount), 0)
+              - COALESCE(SUM(sds.total_discount_amount), 0)) / ds.EmployeeCount AS sales_per_employee
+        FROM summary_daily_sales sds
+        JOIN DimStore ds ON ds.StoreKey = sds.StoreKey
+        JOIN DimDate d ON d.DateKey = sds.DateKey
+        WHERE {where}
+        GROUP BY ds.StoreKey, ds.StoreName, ds.EmployeeCount
+        ORDER BY sales_per_employee DESC
+        """,
+        params,
+    )
+
+    payload = {
+        "filters": {"year": resolved_year, "month": month, "store_key": store_key},
+        "rows": rows,
+    }
+    _cache_set(cache_key, payload)
+    return payload

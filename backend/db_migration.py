@@ -6,6 +6,7 @@ from db_utils import get_engine, resolve_database_name
 INDEX_PLAN = {
     "FactSales": ["DateKey", "StoreKey", "ProductKey", "PromotionKey"],
     "FactOnlineSales": ["DateKey", "StoreKey", "ProductKey", "PromotionKey"],
+    "FactInventory": ["DateKey", "StoreKey", "ProductKey"],
     "DimEmployee": ["EmployeeKey", "ParentEmployeeKey"],
 }
 
@@ -101,6 +102,9 @@ def _ensure_view() -> None:
         NULL AS CustomerKey,
         SalesQuantity,
         SalesAmount,
+        ReturnAmount,
+        DiscountAmount,
+        TotalCost,
         'OFFLINE' AS SaleChannel
     FROM FactSales
     UNION ALL
@@ -113,6 +117,9 @@ def _ensure_view() -> None:
         CustomerKey,
         SalesQuantity,
         SalesAmount,
+        ReturnAmount,
+        DiscountAmount,
+        TotalCost,
         'ONLINE' AS SaleChannel
     FROM FactOnlineSales
     """
@@ -130,20 +137,26 @@ def _ensure_summary_table() -> None:
         PromotionKey BIGINT NOT NULL DEFAULT 0,
         total_sales_quantity DECIMAL(18, 2) NOT NULL DEFAULT 0,
         total_sales_amount DECIMAL(18, 2) NOT NULL DEFAULT 0,
+        total_return_amount DECIMAL(18, 2) NOT NULL DEFAULT 0,
+        total_discount_amount DECIMAL(18, 2) NOT NULL DEFAULT 0,
         PRIMARY KEY (DateKey, StoreKey, ProductKey, PromotionKey)
     )
     """
 
     refill_sql = """
     REPLACE INTO summary_daily_sales
-        (DateKey, StoreKey, ProductKey, PromotionKey, total_sales_quantity, total_sales_amount)
+        (DateKey, StoreKey, ProductKey, PromotionKey,
+         total_sales_quantity, total_sales_amount,
+         total_return_amount, total_discount_amount)
     SELECT
         DATE(DateKey) AS DateKey,
         COALESCE(StoreKey, 0) AS StoreKey,
         ProductKey,
         COALESCE(PromotionKey, 0) AS PromotionKey,
         SUM(SalesQuantity) AS total_sales_quantity,
-        SUM(SalesAmount) AS total_sales_amount
+        SUM(SalesAmount) AS total_sales_amount,
+        SUM(COALESCE(ReturnAmount, 0)) AS total_return_amount,
+        SUM(COALESCE(DiscountAmount, 0)) AS total_discount_amount
     FROM v_total_sales
     GROUP BY DATE(DateKey), COALESCE(StoreKey, 0), ProductKey, COALESCE(PromotionKey, 0)
     """
@@ -151,6 +164,45 @@ def _ensure_summary_table() -> None:
     engine = get_engine()
     with engine.begin() as conn:
         conn.execute(text(create_table_sql))
+        # Add columns if they don't exist (for existing tables)
+        for col, coldef in [
+            ("total_return_amount", "DECIMAL(18,2) NOT NULL DEFAULT 0"),
+            ("total_discount_amount", "DECIMAL(18,2) NOT NULL DEFAULT 0"),
+        ]:
+            try:
+                conn.execute(text(
+                    f"ALTER TABLE summary_daily_sales ADD COLUMN {col} {coldef}"
+                ))
+            except Exception:
+                pass  # column already exists
+        row = conn.execute(text("SELECT COUNT(*) AS cnt FROM summary_daily_sales")).mappings().first()
+        if row and row["cnt"] > 0:
+            # Check if return/discount columns are populated
+            check = conn.execute(text(
+                "SELECT COALESCE(SUM(total_return_amount),0) AS s FROM summary_daily_sales LIMIT 1"
+            )).mappings().first()
+            if check and float(check["s"]) == 0:
+                # Update existing rows with return/discount data instead of full rebuild
+                conn.execute(text("""
+                    UPDATE summary_daily_sales sds
+                    JOIN (
+                        SELECT
+                            DATE(DateKey) AS dk,
+                            COALESCE(StoreKey, 0) AS sk,
+                            ProductKey AS pk,
+                            COALESCE(PromotionKey, 0) AS promk,
+                            SUM(COALESCE(ReturnAmount, 0)) AS ra,
+                            SUM(COALESCE(DiscountAmount, 0)) AS da
+                        FROM v_total_sales
+                        GROUP BY DATE(DateKey), COALESCE(StoreKey, 0), ProductKey, COALESCE(PromotionKey, 0)
+                    ) src ON sds.DateKey = src.dk
+                        AND sds.StoreKey = src.sk
+                        AND sds.ProductKey = src.pk
+                        AND sds.PromotionKey = src.promk
+                    SET sds.total_return_amount = src.ra,
+                        sds.total_discount_amount = src.da
+                """))
+            return
         conn.execute(text(refill_sql))
 
 

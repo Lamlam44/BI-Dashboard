@@ -3,41 +3,34 @@ import { useEffect, useState } from 'react';
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend } from 'chart.js';
 import { Bar } from 'react-chartjs-2';
 import axios from 'axios';
+import { useRefresh } from '../components/RefreshProvider';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
+
+const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
 
 interface Props {
   selectedYear: string;
 }
 
-// 1. TẠO SỔ TAY CACHE CHO BIỂU ĐỒ KHUYẾN MÃI
-const apiCache: Record<string, any> = {};
-
 export default function PromotionImpactChart({ selectedYear }: Props) {
+  const { refreshTick } = useRefresh();
   const [chartData, setChartData] = useState<any>(null);
 
   useEffect(() => {
-    let url = 'http://127.0.0.1:8000/trends/api/promotion-impact';
+    let url = `${API}/trends/api/promotion-impact`;
     if (selectedYear !== 'ALL') {
       url += `?start_date=${selectedYear}-01-01&end_date=${selectedYear}-12-31`;
     }
 
-    // 2. KIỂM TRA CACHE TRƯỚC
-    if (apiCache[url]) {
-      setChartData(apiCache[url]);
-      return;
-    }
-
-    // 3. NẾU CHƯA CÓ, XÓA BIỂU ĐỒ CŨ ĐỂ HIỆN LOADING, RỒI GỌI API
     setChartData(null); 
     axios.get(url)
       .then(res => {
-        apiCache[url] = res.data; // Ghi chép vào sổ
         setChartData(res.data);
       })
       .catch(err => console.error(err));
       
-  }, [selectedYear]);
+  }, [selectedYear, refreshTick]);
 
   if (!chartData) return (
     <div className="w-full p-8 bg-white rounded-2xl shadow-sm border border-gray-100 flex items-center justify-center h-[600px]">

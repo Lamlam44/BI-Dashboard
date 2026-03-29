@@ -3,39 +3,30 @@ import { useEffect, useState } from 'react';
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend } from 'chart.js';
 import { Bar } from 'react-chartjs-2';
 import axios from 'axios';
+import { useRefresh } from '../components/RefreshProvider';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
+
+const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
 
 interface Props {
   selectedYear: string;
 }
 
-const apiCache: Record<string, any> = {};
-
 export default function LocationChart({ selectedYear }: Props) {
+  const { refreshTick } = useRefresh();
   const [allData, setAllData] = useState<any>(null); 
   const [chartData, setChartData] = useState<any>(null); 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    let url = 'http://127.0.0.1:8000/trends/api/sales-by-location';
+    let url = `${API}/trends/api/sales-by-location`;
     if (selectedYear !== 'ALL') {
       url += `?start_date=${selectedYear}-01-01&end_date=${selectedYear}-12-31`;
     }
 
-    if (apiCache[url]) {
-      const cached = apiCache[url];
-      if (cached.status === "error") {
-        setErrorMsg(cached.message || "Khong the tai du lieu khu vuc.");
-      } else {
-        setAllData({ labels: cached.labels, datasets: cached.datasets });
-      }
-      return;
-    }
-
     axios.get(url)
       .then(res => {
-        apiCache[url] = res.data;
         if (res.data.status === "error") {
           setErrorMsg(res.data.message);
         } else {
@@ -43,7 +34,7 @@ export default function LocationChart({ selectedYear }: Props) {
         }
       })
       .catch(err => setErrorMsg("Lỗi kết nối: " + err.message));
-  }, [selectedYear]);
+  }, [selectedYear, refreshTick]);
 
   useEffect(() => {
     if (allData && selectedYear) {

@@ -137,6 +137,35 @@ def create_calendar_features(
             features["day_of_week"].isin([5, 6]).astype(int)
         )
         logger.debug("Created is_weekend")
+
+        # IsHoliday from DimDate table
+        try:
+            from data.data_loader import _get_engine
+            from sqlalchemy import text as sa_text
+            engine = _get_engine()
+            with engine.connect() as conn:
+                holidays = pd.read_sql(
+                    sa_text("SELECT DateKey, IsHoliday FROM DimDate WHERE IsHoliday IS NOT NULL"),
+                    conn,
+                )
+            if not holidays.empty:
+                holidays["DateKey"] = pd.to_datetime(holidays["DateKey"], errors="coerce")
+                holidays = holidays.dropna(subset=["DateKey"])
+                holidays["is_holiday"] = holidays["IsHoliday"].astype(str).str.strip().str.lower().isin(
+                    ["true", "1", "yes"]
+                ).astype(int)
+                features = features.merge(
+                    holidays[["DateKey", "is_holiday"]],
+                    on=date_col,
+                    how="left",
+                )
+                features["is_holiday"] = features["is_holiday"].fillna(0).astype(int)
+                logger.debug("Created is_holiday from DimDate")
+            else:
+                features["is_holiday"] = 0
+        except Exception as holiday_err:
+            logger.warning(f"Could not load IsHoliday from DimDate: {holiday_err}")
+            features["is_holiday"] = 0
         
         return features
     

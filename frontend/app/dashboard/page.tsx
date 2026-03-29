@@ -1,75 +1,378 @@
+"use client";
+
+import { useEffect, useMemo, useState } from 'react';
 import DashboardLayout from '../components/DashboardLayout';
+import { useRefresh } from '../components/RefreshProvider';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  Cell,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+import KpiSummaryCards from './KpiSummaryCards';
+import { SalesPerSqftChart, BudgetVsActualChart, StockoutRateChart, SafetyStockChart } from './AdvancedKpiCharts';
+
+type SalesDashboardResponse = {
+  status: 'success' | 'empty' | 'error';
+  message?: string;
+  ytd: number;
+  mtd: number;
+  total: number;
+  ytd_profit: number;
+  mtd_profit: number;
+  total_profit: number;
+  avg_profit_margin: number;
+  yoy_growth: number;
+  mom_growth: number;
+  trend: {
+    labels: string[];
+    data: number[];
+  };
+  profit_trend: {
+    labels: string[];
+    data: number[];
+  };
+  store_pie: {
+    labels: string[];
+    data: number[];
+  };
+  last_updated: string | null;
+};
+
+type ChannelData = {
+  channel: string;
+  revenue: number;
+  profit: number;
+  transactions: number;
+  share_pct: number;
+};
+
+type ChannelResponse = {
+  status: string;
+  channels: ChannelData[];
+  total_revenue: number;
+};
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
+const PIE_COLORS = ['#0ea5e9', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#14b8a6', '#64748b'];
+
+const formatMoney = (value: number) =>
+  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value || 0);
+
+const formatPercent = (value: number) => `${((value || 0) * 100).toFixed(1)}%`;
+
+const tooltipMoney = (value: unknown) => {
+  const parsed = typeof value === 'number' ? value : Number(value || 0);
+  return formatMoney(Number.isFinite(parsed) ? parsed : 0);
+};
+
+async function fetchJsonWithTimeout<T>(url: string, timeoutMs = 120000): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`Failed to load sales dashboard (${response.status})`);
+    }
+    return (await response.json()) as T;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const Dashboard = () => {
+  const { refreshTick, realtimeSummary } = useRefresh();
+  const [data, setData] = useState<SalesDashboardResponse | null>(null);
+  const [channelData, setChannelData] = useState<ChannelResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    async function loadDashboard() {
+      setLoading(true);
+      setError(null);
+      try {
+        const [salesPayload, channelPayload] = await Promise.all([
+          fetchJsonWithTimeout<SalesDashboardResponse>(
+            `${API_BASE_URL}/sale-profit/api/dashboard/sales`,
+            180000,
+          ),
+          fetchJsonWithTimeout<ChannelResponse>(
+            `${API_BASE_URL}/sale-profit/api/channels`,
+            60000,
+          ).catch(() => null),
+        ]);
+        if (mounted) {
+          setData(salesPayload);
+          if (channelPayload) setChannelData(channelPayload);
+        }
+      } catch (err) {
+        if (mounted) {
+          setError((err as Error).message);
+        }
+      } finally {
+        if (mounted) {
+          setLoading(false);
+        }
+      }
+    }
+
+    loadDashboard();
+    return () => {
+      mounted = false;
+    };
+  }, [refreshTick]);
+
+  const trendRows = useMemo(() => {
+    const labels = data?.trend?.labels || [];
+    const salesValues = data?.trend?.data || [];
+    const profitValues = data?.profit_trend?.data || [];
+    return labels.map((label, idx) => ({
+      date: label,
+      sales: salesValues[idx] || 0,
+      profit: profitValues[idx] || 0,
+    }));
+  }, [data]);
+
+  const pieRows = useMemo(() => {
+    const labels = data?.store_pie?.labels || [];
+    const values = data?.store_pie?.data || [];
+    return labels.map((label, idx) => ({ name: String(label), value: values[idx] || 0 }));
+  }, [data]);
+
   return (
     <DashboardLayout>
       <div className="space-y-8">
-        {/* Page Title */}
         <div>
-          <h1 className="text-3xl font-bold text-slate-900">
-            Sales & Profit
-          </h1>
+          <h1 className="text-3xl font-bold text-slate-900">Sales & Profit</h1>
           <p className="text-slate-600 mt-2">
-            Monitor your sales performance and profit margins
+            Dashboard thong ke doanh thu theo ngay, YTD/MTD va ty trong theo cua hang
           </p>
         </div>
 
-        {/* Dashboard Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {loading && <p className="text-sm text-slate-500">Loading sales dashboard...</p>}
+        {error && <p className="text-sm text-red-600">{error}</p>}
+
+        {/* ── Realtime Today (SSE-driven) ── */}
+        {realtimeSummary && (
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500" />
+              </span>
+              <h2 className="text-sm font-semibold text-blue-800">
+                Today Live &mdash; {realtimeSummary.metric_date}
+              </h2>
+              {realtimeSummary.last_updated && (
+                <span className="ml-auto text-xs text-blue-500">
+                  Updated {new Date(realtimeSummary.last_updated).toLocaleTimeString()}
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+              {[
+                { label: 'Today Revenue', value: formatMoney(realtimeSummary.today_revenue) },
+                { label: 'Today Profit', value: formatMoney(realtimeSummary.today_profit) },
+                { label: 'Today Orders', value: realtimeSummary.today_orders.toLocaleString() },
+                { label: 'Items Sold', value: realtimeSummary.today_items_sold.toLocaleString() },
+                { label: 'MTD Revenue', value: formatMoney(realtimeSummary.mtd_revenue) },
+                { label: 'MTD Profit', value: formatMoney(realtimeSummary.mtd_profit) },
+              ].map((c) => (
+                <div key={c.label} className="bg-white/70 rounded-lg p-3 text-center">
+                  <p className="text-xs text-slate-500">{c.label}</p>
+                  <p className="text-lg font-bold text-slate-900 mt-0.5">{c.value}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {!loading && !error && data?.status === 'empty' && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-900 text-sm">
+            {data.message || 'Du lieu sale_profit dang trong, vui long thu refresh cache.'}
+          </div>
+        )}
+
+        {!loading && !error && (
+          <>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
           {[
             {
-              title: 'Total Sales',
-              value: '$2.4M',
-              change: '+12.5%',
-              positive: true,
+              title: 'YTD Sales',
+              value: formatMoney(data?.ytd || 0),
+              subtitle: 'Year-to-date tong doanh thu',
+            },
+            {
+              title: 'Total Profit',
+              value: formatMoney(data?.total_profit || 0),
+              subtitle: 'Tong loi nhuan (Sales - Cost)',
             },
             {
               title: 'Profit Margin',
-              value: '28.5%',
-              change: '+2.3%',
-              positive: true,
+              value: formatPercent(data?.avg_profit_margin || 0),
+              subtitle: 'Bien loi nhuan trung binh',
             },
             {
-              title: 'Transactions',
-              value: '12,584',
-              change: '-3.2%',
-              positive: false,
+              title: 'YoY Growth',
+              value: `${(data?.yoy_growth || 0) >= 0 ? '+' : ''}${(data?.yoy_growth || 0).toFixed(1)}%`,
+              subtitle: 'So voi cung ky nam truoc',
+              color: (data?.yoy_growth || 0) >= 0 ? 'text-green-600' : 'text-red-600',
             },
             {
-              title: 'Avg. Order Value',
-              value: '$190.50',
-              change: '+5.1%',
-              positive: true,
+              title: 'MoM Growth',
+              value: `${(data?.mom_growth || 0) >= 0 ? '+' : ''}${(data?.mom_growth || 0).toFixed(1)}%`,
+              subtitle: 'So voi thang truoc',
+              color: (data?.mom_growth || 0) >= 0 ? 'text-green-600' : 'text-red-600',
+            },
+            {
+              title: 'Last Updated',
+              value: data?.last_updated || 'N/A',
+              subtitle: 'Ngay du lieu gan nhat',
             },
           ].map((card, idx) => (
             <div
               key={idx}
-              className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm hover:shadow-md transition-shadow"
+              className="bg-white rounded-lg border border-slate-200 p-5 shadow-sm hover:shadow-md transition-shadow"
             >
               <p className="text-slate-600 text-sm font-medium">{card.title}</p>
-              <p className="text-2xl font-bold text-slate-900 mt-2">
+              <p className={`text-xl font-bold mt-2 ${'color' in card && card.color ? card.color : 'text-slate-900'}`}>
                 {card.value}
               </p>
-              <p
-                className={`text-sm font-medium mt-3 ${
-                  card.positive ? 'text-green-600' : 'text-red-600'
-                }`}
-              >
-                {card.positive ? '↑' : '↓'} {card.change} vs last month
-              </p>
+              <p className="text-xs text-slate-500 mt-2">{card.subtitle}</p>
             </div>
           ))}
         </div>
 
-        {/* Chart Placeholder */}
-        <div className="bg-white rounded-lg border border-slate-200 p-8 shadow-sm">
-          <h2 className="text-lg font-bold text-slate-900 mb-6">
-            Sales Trend
-          </h2>
-          <div className="h-64 flex items-center justify-center bg-slate-50 rounded-lg border border-dashed border-slate-300">
-            <p className="text-slate-500">Chart placeholder - Add your charting library here</p>
+        {/* KPI Summary from Aggregate Tables */}
+        <KpiSummaryCards />
+
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm">
+            <h2 className="text-lg font-bold text-slate-900 mb-4">Sales Trend</h2>
+            <div className="h-72">
+              {trendRows.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={trendRows}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" tick={{ fontSize: 11 }} minTickGap={30} />
+                    <YAxis tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
+                    <Tooltip formatter={tooltipMoney} />
+                    <Line type="monotone" dataKey="sales" stroke="#2563eb" strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="profit" stroke="#16a34a" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-full flex items-center justify-center text-slate-500">Khong co du lieu trend.</div>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm">
+            <h2 className="text-lg font-bold text-slate-900 mb-4">Top Stores by Sales</h2>
+            <div className="h-72">
+              {pieRows.length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie data={pieRows} dataKey="value" nameKey="name" outerRadius={110}>
+                      {pieRows.map((_, idx) => (
+                        <Cell key={`store-${idx}`} fill={PIE_COLORS[idx % PIE_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={tooltipMoney} />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-full flex items-center justify-center text-slate-500">Khong co du lieu store pie.</div>
+              )}
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+              {pieRows.slice(0, 6).map((row, idx) => (
+                <div key={row.name} className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded px-3 py-2">
+                  <span className="truncate pr-2">{row.name}</span>
+                  <span className="font-semibold">{formatMoney(row.value)}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
+
+        {/* Channel Breakdown */}
+        {channelData && channelData.channels && channelData.channels.length > 0 && (
+          <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm">
+            <h2 className="text-lg font-bold text-slate-900 mb-4">Channel Breakdown (Online vs Offline)</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={channelData.channels}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="channel" />
+                    <YAxis tickFormatter={(v) => `${Math.round(v / 1_000_000)}M`} />
+                    <Tooltip formatter={tooltipMoney} />
+                    <Legend />
+                    <Bar dataKey="revenue" name="Revenue" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="profit" name="Profit" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="space-y-3">
+                {channelData.channels.map((ch) => (
+                  <div key={ch.channel} className="bg-slate-50 border border-slate-200 rounded-lg p-4">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="font-semibold text-slate-900">{ch.channel}</span>
+                      <span className="text-sm font-medium text-blue-600">{ch.share_pct}%</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-sm">
+                      <div>
+                        <p className="text-slate-500">Revenue</p>
+                        <p className="font-semibold">{formatMoney(ch.revenue)}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Profit</p>
+                        <p className="font-semibold">{formatMoney(ch.profit)}</p>
+                      </div>
+                      <div>
+                        <p className="text-slate-500">Transactions</p>
+                        <p className="font-semibold">{ch.transactions.toLocaleString()}</p>
+                      </div>
+                    </div>
+                    {/* Share bar */}
+                    <div className="mt-2 w-full bg-slate-200 rounded-full h-2">
+                      <div
+                        className={`h-2 rounded-full ${ch.channel === 'Online' ? 'bg-blue-500' : 'bg-green-500'}`}
+                        style={{ width: `${ch.share_pct}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Advanced KPIs Row */}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <SalesPerSqftChart />
+          <BudgetVsActualChart />
+        </div>
+
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+          <StockoutRateChart />
+          <SafetyStockChart />
+        </div>
+          </>
+        )}
       </div>
     </DashboardLayout>
   );

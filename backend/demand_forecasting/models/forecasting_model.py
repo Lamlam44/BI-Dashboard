@@ -141,7 +141,12 @@ class DemandForecastingModel:
             base_params["objective"] = "regression"
             
             self.model_base = lgb.LGBMRegressor(**base_params)
-            self.model_base.fit(X_train, y_train, eval_set=[(X_test, y_test)], eval_metric="rmse")
+            self.model_base.fit(
+                X_train, y_train,
+                eval_set=[(X_test, y_test)],
+                eval_metric="rmse",
+                callbacks=[lgb.log_evaluation(period=0)],
+            )
             
             base_pred_train = self.model_base.predict(X_train)
             base_pred_test = self.model_base.predict(X_test)
@@ -153,7 +158,12 @@ class DemandForecastingModel:
             lower_params["alpha"] = 0.05
             
             self.model_lower = lgb.LGBMRegressor(**lower_params)
-            self.model_lower.fit(X_train, y_train, eval_set=[(X_test, y_test)], eval_metric="quantile")
+            self.model_lower.fit(
+                X_train, y_train,
+                eval_set=[(X_test, y_test)],
+                eval_metric="quantile",
+                callbacks=[lgb.log_evaluation(period=0)],
+            )
             
             lower_pred_train = self.model_lower.predict(X_train)
             lower_pred_test = self.model_lower.predict(X_test)
@@ -165,7 +175,12 @@ class DemandForecastingModel:
             upper_params["alpha"] = 0.95
             
             self.model_upper = lgb.LGBMRegressor(**upper_params)
-            self.model_upper.fit(X_train, y_train, eval_set=[(X_test, y_test)], eval_metric="quantile")
+            self.model_upper.fit(
+                X_train, y_train,
+                eval_set=[(X_test, y_test)],
+                eval_metric="quantile",
+                callbacks=[lgb.log_evaluation(period=0)],
+            )
             
             upper_pred_train = self.model_upper.predict(X_train)
             upper_pred_test = self.model_upper.predict(X_test)
