@@ -1,6 +1,5 @@
-from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 import logging
 import time
 import threading
@@ -19,18 +18,6 @@ logger = logging.getLogger(__name__)
 CACHE_DIR = Path(__file__).parent / "cache"
 SALES_PROFIT_SNAPSHOT = CACHE_DIR / "sales_profit_daily_snapshot.parquet"
 _BUILD_LOCK = threading.Lock()
-
-
-def _to_date(date_key: Any) -> Optional[datetime]:
-    if date_key is None:
-        return None
-    raw = str(date_key)
-    if len(raw) != 8 or not raw.isdigit():
-        return None
-    try:
-        return datetime.strptime(raw, "%Y%m%d")
-    except ValueError:
-        return None
 
 
 def _parquet_has_data() -> bool:
@@ -272,13 +259,50 @@ def get_sales_profit_dashboard(start_date: Optional[str] = None, end_date: Optio
 
 
 def get_channel_breakdown(start_date: Optional[str] = None, end_date: Optional[str] = None) -> Dict[str, Any]:
-    """Revenue split between offline and online channels (from pre-aggregated table)."""
+    """Revenue split between offline and online channels.
+    When date filters are provided, queries live from fact tables.
+    Otherwise falls back to pre-aggregated agg_channel_summary.
+    """
     engine = get_engine()
 
-    query = text("SELECT channel, revenue, profit, transactions FROM agg_channel_summary")
+    if start_date or end_date:
+        # Live query with date filter
+        params: Dict[str, Any] = {}
+        where_offline = "1=1"
+        where_online = "1=1"
+        if start_date:
+            where_offline += " AND s.DateKey >= :start_date"
+            where_online += " AND o.DateKey >= :start_date"
+            params["start_date"] = start_date
+        if end_date:
+            where_offline += " AND s.DateKey <= :end_date"
+            where_online += " AND o.DateKey <= :end_date"
+            params["end_date"] = end_date
 
-    with engine.connect() as conn:
-        df = pd.read_sql(query, conn)
+        query = text(f"""
+            SELECT 'Offline' AS channel,
+                   SUM(s.total_sales_amount) AS revenue,
+                   SUM(s.total_sales_amount) - SUM(s.total_sales_quantity * p.UnitCost) AS profit,
+                   SUM(s.total_sales_quantity) AS transactions
+            FROM summary_daily_sales s
+            LEFT JOIN DimProduct p ON p.ProductKey = s.ProductKey
+            WHERE {where_offline}
+            UNION ALL
+            SELECT 'Online' AS channel,
+                   SUM(o.SalesAmount) AS revenue,
+                   SUM(o.SalesAmount) - SUM(o.SalesQuantity * p.UnitCost) AS profit,
+                   SUM(o.SalesQuantity) AS transactions
+            FROM FactOnlineSales o
+            LEFT JOIN DimProduct p ON p.ProductKey = o.ProductKey
+            WHERE {where_online}
+        """)
+        with engine.connect() as conn:
+            df = pd.read_sql(query, conn, params=params)
+    else:
+        # No filter — use pre-aggregated table (fast path)
+        query = text("SELECT channel, revenue, profit, transactions FROM agg_channel_summary")
+        with engine.connect() as conn:
+            df = pd.read_sql(query, conn)
 
     df = df.fillna(0)
     total_rev = float(df["revenue"].sum())
@@ -295,8 +319,50 @@ def get_channel_breakdown(start_date: Optional[str] = None, end_date: Optional[s
     return {"status": "success", "channels": rows, "total_revenue": total_rev}
 
 
-def get_kpi_summary() -> Dict[str, Any]:
-    """Return pre-computed KPI summary from aggregate table (fallback to live query)."""
+def get_kpi_summary(start_date: Optional[str] = None, end_date: Optional[str] = None) -> Dict[str, Any]:
+    """Return KPI summary. When date filters are provided, computes live from snapshot.
+    Without filters, uses the pre-aggregated agg_kpi_summary table (fast path).
+    """
+    if start_date or end_date:
+        # Live computation from snapshot with date filter
+        snapshot = load_sales_profit_snapshot(force_refresh=False)
+        if snapshot.empty:
+            return {"status": "empty", "source": "live", "kpis": {}}
+
+        df = snapshot.copy()
+        if "Date" not in df.columns:
+            df["Date"] = _parse_dates(df["DateKey"])
+        df = df.dropna(subset=["Date"])
+
+        if start_date:
+            df = df[df["Date"] >= pd.to_datetime(start_date)]
+        if end_date:
+            df = df[df["Date"] <= pd.to_datetime(end_date)]
+
+        if df.empty:
+            return {"status": "empty", "source": "live", "kpis": {}}
+
+        total_rev = float(df["total_sales"].sum())
+        total_cost = float(df["total_cost"].sum())
+        total_profit = total_rev - total_cost
+        n_stores = int(df["StoreKey"].nunique())
+
+        # total_transactions and avg_transaction_value: count daily rows as proxy
+        # Use sum of net sales / avg per day
+        avg_txn_value = float((df["total_sales"] / df["total_sales"].count()).mean()) if not df.empty else 0
+
+        return {
+            "status": "success",
+            "source": "live",
+            "kpis": {
+                "total_revenue": total_rev,
+                "total_profit": total_profit,
+                "gross_margin": round((total_profit / total_rev * 100) if total_rev else 0, 2),
+                "active_stores": n_stores,
+            },
+        }
+
+    # No filter — use pre-aggregated table for speed
     engine = get_engine()
     try:
         query = text("SELECT kpi_key, kpi_value FROM agg_kpi_summary ORDER BY kpi_key")
@@ -308,7 +374,7 @@ def get_kpi_summary() -> Dict[str, Any]:
     except Exception:
         pass
 
-    # Fallback: compute live from snapshot
+    # Fallback: compute live from snapshot (no filter)
     snapshot = load_sales_profit_snapshot(force_refresh=False)
     if snapshot.empty:
         return {"status": "empty", "kpis": {}}

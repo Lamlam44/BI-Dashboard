@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import DashboardLayout from '../components/DashboardLayout';
 import { useRefresh } from '../components/RefreshProvider';
 import {
@@ -89,12 +89,59 @@ async function fetchJsonWithTimeout<T>(url: string, timeoutMs = 120000): Promise
   }
 }
 
+/* ── Time-filter presets ────────────────────────── */
+type PresetKey = 'all' | 'ytd' | '12m' | '6m' | '3m' | '1m' | 'custom';
+interface Preset { key: PresetKey; label: string }
+const PRESETS: Preset[] = [
+  { key: 'all', label: 'Tất cả' },
+  { key: 'ytd', label: 'YTD' },
+  { key: '12m', label: '12 tháng' },
+  { key: '6m', label: '6 tháng' },
+  { key: '3m', label: '3 tháng' },
+  { key: '1m', label: '1 tháng' },
+  { key: 'custom', label: 'Tùy chọn' },
+];
+
+function presetToRange(key: PresetKey): { start: string | null; end: string | null } {
+  if (key === 'all') return { start: null, end: null };
+  const now = new Date();
+  const end = now.toISOString().slice(0, 10);
+  const d = new Date(now);
+  switch (key) {
+    case 'ytd':  d.setMonth(0, 1); break;
+    case '12m':  d.setMonth(d.getMonth() - 12); break;
+    case '6m':   d.setMonth(d.getMonth() - 6); break;
+    case '3m':   d.setMonth(d.getMonth() - 3); break;
+    case '1m':   d.setMonth(d.getMonth() - 1); break;
+    default:     return { start: null, end: null };
+  }
+  return { start: d.toISOString().slice(0, 10), end };
+}
+
 const Dashboard = () => {
   const { refreshTick, realtimeSummary } = useRefresh();
   const [data, setData] = useState<SalesDashboardResponse | null>(null);
   const [channelData, setChannelData] = useState<ChannelResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  /* ── Time filter state ── */
+  const [preset, setPreset] = useState<PresetKey>('all');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+
+  const dateRange = useMemo(() => {
+    if (preset === 'custom') return { start: customStart || null, end: customEnd || null };
+    return presetToRange(preset);
+  }, [preset, customStart, customEnd]);
+
+  const buildQS = useCallback((base: string) => {
+    const params = new URLSearchParams();
+    if (dateRange.start) params.set('start_date', dateRange.start);
+    if (dateRange.end) params.set('end_date', dateRange.end);
+    const qs = params.toString();
+    return qs ? `${base}?${qs}` : base;
+  }, [dateRange]);
 
   useEffect(() => {
     let mounted = true;
@@ -104,11 +151,11 @@ const Dashboard = () => {
       try {
         const [salesPayload, channelPayload] = await Promise.all([
           fetchJsonWithTimeout<SalesDashboardResponse>(
-            `${API_BASE_URL}/sale-profit/api/dashboard/sales`,
+            buildQS(`${API_BASE_URL}/sale-profit/api/dashboard/sales`),
             180000,
           ),
           fetchJsonWithTimeout<ChannelResponse>(
-            `${API_BASE_URL}/sale-profit/api/channels`,
+            buildQS(`${API_BASE_URL}/sale-profit/api/channels`),
             60000,
           ).catch(() => null),
         ]);
@@ -131,7 +178,7 @@ const Dashboard = () => {
     return () => {
       mounted = false;
     };
-  }, [refreshTick]);
+  }, [refreshTick, buildQS]);
 
   const trendRows = useMemo(() => {
     const labels = data?.trend?.labels || [];
@@ -153,11 +200,47 @@ const Dashboard = () => {
   return (
     <DashboardLayout>
       <div className="space-y-8">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-900">Sales & Profit</h1>
-          <p className="text-slate-600 mt-2">
-            Dashboard thong ke doanh thu theo ngay, YTD/MTD va ty trong theo cua hang
-          </p>
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-slate-900">Sales & Profit</h1>
+            <p className="text-slate-600 mt-1">
+              Dashboard thong ke doanh thu theo ngay, YTD/MTD va ty trong theo cua hang
+            </p>
+          </div>
+        </div>
+
+        {/* ── Time Filter Bar ── */}
+        <div className="flex flex-wrap items-center gap-2 bg-white border border-slate-200 rounded-lg px-4 py-3 shadow-sm">
+          {PRESETS.map((p) => (
+            <button
+              key={p.key}
+              onClick={() => setPreset(p.key)}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                preset === p.key
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+          {preset === 'custom' && (
+            <div className="flex items-center gap-2 ml-2">
+              <input
+                type="date"
+                value={customStart}
+                onChange={(e) => setCustomStart(e.target.value)}
+                className="border border-slate-300 rounded-md px-2 py-1 text-sm"
+              />
+              <span className="text-slate-400">→</span>
+              <input
+                type="date"
+                value={customEnd}
+                onChange={(e) => setCustomEnd(e.target.value)}
+                className="border border-slate-300 rounded-md px-2 py-1 text-sm"
+              />
+            </div>
+          )}
         </div>
 
         {loading && <p className="text-sm text-slate-500">Loading sales dashboard...</p>}
@@ -255,7 +338,7 @@ const Dashboard = () => {
         </div>
 
         {/* KPI Summary from Aggregate Tables */}
-        <KpiSummaryCards />
+        <KpiSummaryCards startDate={dateRange.start} endDate={dateRange.end} />
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
           <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm">
@@ -311,7 +394,17 @@ const Dashboard = () => {
         {/* Channel Breakdown */}
         {channelData && channelData.channels && channelData.channels.length > 0 && (
           <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm">
-            <h2 className="text-lg font-bold text-slate-900 mb-4">Channel Breakdown (Online vs Offline)</h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-slate-900">Channel Breakdown (Online vs Offline)</h2>
+              {!(dateRange.start || dateRange.end) && (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 border border-amber-300 px-3 py-1 text-xs font-medium text-amber-700">
+                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  Toàn thời gian — không áp dụng bộ lọc ngày
+                </span>
+              )}
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
@@ -363,8 +456,8 @@ const Dashboard = () => {
 
         {/* Advanced KPIs Row */}
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          <SalesPerSqftChart />
-          <BudgetVsActualChart />
+          <SalesPerSqftChart startDate={dateRange.start} endDate={dateRange.end} />
+          <BudgetVsActualChart startDate={dateRange.start} endDate={dateRange.end} />
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">

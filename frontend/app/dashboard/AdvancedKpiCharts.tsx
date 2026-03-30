@@ -22,7 +22,12 @@ interface SqftStore {
   sales_per_sqft: number;
 }
 
-export function SalesPerSqftChart() {
+interface DateFilterProps {
+  startDate?: string | null;
+  endDate?: string | null;
+}
+
+export function SalesPerSqftChart({ startDate, endDate }: DateFilterProps = {}) {
   const { refreshTick } = useRefresh();
   const [stores, setStores] = useState<SqftStore[]>([]);
   const [avg, setAvg] = useState(0);
@@ -30,7 +35,10 @@ export function SalesPerSqftChart() {
 
   useEffect(() => {
     setLoading(true);
-    axios.get(`${API}/sale-profit/api/sales-per-sqft`)
+    const params: Record<string, string> = {};
+    if (startDate) params.start_date = startDate;
+    if (endDate) params.end_date = endDate;
+    axios.get(`${API}/sale-profit/api/sales-per-sqft`, { params })
       .then(res => {
         if (res.data.status === 'success') {
           setStores(res.data.stores.slice(0, 15));
@@ -39,7 +47,7 @@ export function SalesPerSqftChart() {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [refreshTick]);
+  }, [refreshTick, startDate, endDate]);
 
   if (loading) return <div className="animate-pulse h-64 bg-slate-100 rounded-lg" />;
   if (!stores.length) return null;
@@ -74,7 +82,7 @@ interface BudgetStore {
   attainment_pct: number;
 }
 
-export function BudgetVsActualChart() {
+export function BudgetVsActualChart({ startDate, endDate }: DateFilterProps = {}) {
   const { refreshTick } = useRefresh();
   const [stores, setStores] = useState<BudgetStore[]>([]);
   const [overall, setOverall] = useState(0);
@@ -82,7 +90,10 @@ export function BudgetVsActualChart() {
 
   useEffect(() => {
     setLoading(true);
-    axios.get(`${API}/sale-profit/api/budget-vs-actual`)
+    const params: Record<string, string> = {};
+    if (startDate) params.start_date = startDate;
+    if (endDate) params.end_date = endDate;
+    axios.get(`${API}/sale-profit/api/budget-vs-actual`, { params })
       .then(res => {
         if (res.data.status === 'success') {
           setStores(res.data.stores.slice(0, 10));
@@ -91,7 +102,7 @@ export function BudgetVsActualChart() {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [refreshTick]);
+  }, [refreshTick, startDate, endDate]);
 
   if (loading) return <div className="animate-pulse h-64 bg-slate-100 rounded-lg" />;
   if (!stores.length) return null;
@@ -156,7 +167,18 @@ export function StockoutRateChart() {
 
   return (
     <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm">
-      <h2 className="text-lg font-bold text-slate-900 mb-4">Stockout Rate</h2>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-bold text-slate-900">Stockout Rate</h2>
+        <span
+          title="Dữ liệu tồn kho là snapshot hiện tại, không phân tầng theo ngày"
+          className="inline-flex items-center gap-1.5 rounded-full bg-gray-100 border border-gray-300 px-3 py-1 text-xs font-medium text-gray-500 cursor-default select-none"
+        >
+          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+          </svg>
+          Không áp dụng bộ lọc thời gian
+        </span>
+      </div>
       <div className="grid grid-cols-2 gap-4">
         <div className="h-48">
           <ResponsiveContainer width="100%" height="100%">
@@ -226,7 +248,18 @@ export function SafetyStockChart() {
 
   return (
     <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm">
-      <h2 className="text-lg font-bold text-slate-900 mb-4">Safety Stock Analysis</h2>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-bold text-slate-900">Safety Stock Analysis</h2>
+        <span
+          title="Dữ liệu tồn kho là snapshot hiện tại, không phân tầng theo ngày"
+          className="inline-flex items-center gap-1.5 rounded-full bg-gray-100 border border-gray-300 px-3 py-1 text-xs font-medium text-gray-500 cursor-default select-none"
+        >
+          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 115.636 5.636m12.728 12.728L5.636 5.636" />
+          </svg>
+          Không áp dụng bộ lọc thời gian
+        </span>
+      </div>
       <div className="grid grid-cols-2 gap-4">
         <div className="h-48">
           <ResponsiveContainer width="100%" height="100%">

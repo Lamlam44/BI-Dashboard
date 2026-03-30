@@ -58,8 +58,8 @@ def sale_profit_channels(start_date: Optional[str] = None, end_date: Optional[st
 
 
 @router.get("/api/kpi-summary")
-def sale_profit_kpi_summary():
-    payload = get_kpi_summary()
+def sale_profit_kpi_summary(start_date: Optional[str] = None, end_date: Optional[str] = None):
+    payload = get_kpi_summary(start_date=start_date, end_date=end_date)
     return serialize_payload(payload)
 
 
