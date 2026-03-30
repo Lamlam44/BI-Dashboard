@@ -17,20 +17,29 @@ interface KpiData {
   active_stores?: number;
 }
 
+interface KpiSummaryCardsProps {
+  startDate?: string | null;
+  endDate?: string | null;
+}
+
 const fmtMoney = (v: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v);
 
 const fmtNum = (v: number) =>
   new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(v);
 
-export default function KpiSummaryCards() {
+export default function KpiSummaryCards({ startDate, endDate }: KpiSummaryCardsProps = {}) {
   const { refreshTick } = useRefresh();
   const [kpis, setKpis] = useState<KpiData | null>(null);
   const [loading, setLoading] = useState(true);
+  const isFiltered = !!(startDate || endDate);
 
   useEffect(() => {
     setLoading(true);
-    axios.get(`${API}/sale-profit/api/kpi-summary`)
+    const params: Record<string, string> = {};
+    if (startDate) params.start_date = startDate;
+    if (endDate) params.end_date = endDate;
+    axios.get(`${API}/sale-profit/api/kpi-summary`, { params })
       .then(res => {
         const d = res.data;
         if (d.status === 'success' && d.kpis) {
@@ -39,7 +48,7 @@ export default function KpiSummaryCards() {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [refreshTick]);
+  }, [refreshTick, startDate, endDate]);
 
   if (loading) {
     return (
@@ -100,7 +109,25 @@ export default function KpiSummaryCards() {
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-      <h2 className="text-lg font-bold text-slate-900 mb-4">KPI Tổng Quan</h2>
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-bold text-slate-900">KPI Tổng Quan</h2>
+        {!isFiltered && (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 border border-amber-300 px-3 py-1 text-xs font-medium text-amber-700">
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            Toàn thời gian — không áp dụng bộ lọc ngày
+          </span>
+        )}
+        {isFiltered && (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 border border-blue-300 px-3 py-1 text-xs font-medium text-blue-700">
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-.293.707L13 13.414V19a1 1 0 01-.553.894l-4 2A1 1 0 017 21v-7.586L3.293 6.707A1 1 0 013 6V4z" />
+            </svg>
+            Theo khoảng thời gian đã chọn
+          </span>
+        )}
+      </div>
       <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-4">
         {cards.map((c, idx) => (
           <div key={idx} className={`rounded-lg border-l-4 ${c.color} bg-slate-50 p-4`}>
@@ -113,3 +140,4 @@ export default function KpiSummaryCards() {
     </div>
   );
 }
+
