@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import DashboardLayout from '../components/DashboardLayout';
 import {
   Upload, Database, RefreshCw, Activity, Server,
@@ -9,6 +10,7 @@ import {
   Trash2, AlertCircle, Download, Eye,
 } from 'lucide-react';
 import axios from 'axios';
+import { useAuth } from '../store/useAuth';
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
 const DM_API = `${API}/data`;
@@ -97,7 +99,7 @@ const StatusBadge = ({ status }: { status: string }) => {
 // Main Component
 // ═══════════════════════════════════════════════════════════════
 
-export default function DataManagementPage() {
+function DataManagementContent() {
   const [activeTab, setActiveTab] = useState<TabKey>('overview');
 
   // DW Health
@@ -913,4 +915,27 @@ export default function DataManagementPage() {
       </div>
     </DashboardLayout>
   );
+}
+
+export default function DataManagementPage() {
+  const router = useRouter();
+  const { user } = useAuth();
+
+  useEffect(() => {
+    if (user && user.role !== 'admin') {
+      router.replace('/dashboard');
+    }
+  }, [user, router]);
+
+  if (!user || user.role !== 'admin') {
+    return (
+      <DashboardLayout>
+        <div className="flex items-center justify-center h-[60vh] text-slate-500">
+          Đang chuyển hướng...
+        </div>
+      </DashboardLayout>
+    );
+  }
+
+  return <DataManagementContent />;
 }

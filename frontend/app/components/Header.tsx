@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Timer, RefreshCw } from 'lucide-react';
 import { useRefresh, IntervalOption } from './RefreshProvider';
+import AuthControl from './AuthControl';
 
 const INTERVAL_OPTIONS: { value: IntervalOption; label: string }[] = [
   { value: 15, label: '15 phút' },
@@ -37,6 +38,9 @@ const Header = () => {
 
         <div className="flex items-center gap-3">
           <div className="text-sm text-slate-500 font-medium">Contoso Retail DW</div>
+
+          {/* Auth control */}
+          <AuthControl />
 
           {/* Manual refresh button */}
           <button

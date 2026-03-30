@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import axios from 'axios';
+import api from '../lib/api';
 import { useRefresh } from '../components/RefreshProvider';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
@@ -38,7 +38,7 @@ export function SalesPerSqftChart({ startDate, endDate }: DateFilterProps = {}) 
     const params: Record<string, string> = {};
     if (startDate) params.start_date = startDate;
     if (endDate) params.end_date = endDate;
-    axios.get(`${API}/sale-profit/api/sales-per-sqft`, { params })
+    api.get(`${API}/sale-profit/api/sales-per-sqft`, { params })
       .then(res => {
         if (res.data.status === 'success') {
           setStores(res.data.stores.slice(0, 15));
@@ -93,7 +93,7 @@ export function BudgetVsActualChart({ startDate, endDate }: DateFilterProps = {}
     const params: Record<string, string> = {};
     if (startDate) params.start_date = startDate;
     if (endDate) params.end_date = endDate;
-    axios.get(`${API}/sale-profit/api/budget-vs-actual`, { params })
+    api.get(`${API}/sale-profit/api/budget-vs-actual`, { params })
       .then(res => {
         if (res.data.status === 'success') {
           setStores(res.data.stores.slice(0, 10));
@@ -149,7 +149,7 @@ export function StockoutRateChart() {
 
   useEffect(() => {
     setLoading(true);
-    axios.get(`${API}/data/api/stockout-rate`)
+    api.get(`${API}/data/api/stockout-rate`)
       .then(res => {
         if (res.data.status === 'success') setData(res.data);
       })
@@ -228,7 +228,7 @@ export function SafetyStockChart() {
 
   useEffect(() => {
     setLoading(true);
-    axios.get(`${API}/data/api/safety-stock`)
+    api.get(`${API}/data/api/safety-stock`)
       .then(res => {
         if (res.data.status === 'success') setData(res.data);
       })

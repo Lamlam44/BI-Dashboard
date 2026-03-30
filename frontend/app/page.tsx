@@ -7,7 +7,8 @@ export default function Home() {
   const router = useRouter();
 
   useEffect(() => {
-    router.replace('/dashboard');
+    const token = localStorage.getItem('bi_token');
+    router.replace(token ? '/dashboard' : '/login');
   }, [router]);
 
   return null;

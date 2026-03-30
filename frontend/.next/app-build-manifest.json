@@ -23,7 +23,7 @@
       "static/chunks/node_modules_next_dist_986f43._.js",
       "static/chunks/app_827800._.js",
       "static/chunks/app_layout_tsx_fce82f._.js",
-      "static/chunks/app_44190b._.js",
+      "static/chunks/app_082d9d._.js",
       "static/chunks/node_modules_next_cc4457._.js",
       "static/chunks/node_modules_recharts_es6_util_130a52._.js",
       "static/chunks/node_modules_recharts_es6_component_027152._.js",
@@ -32,8 +32,8 @@
       "static/chunks/node_modules_recharts_es6_99b867._.js",
       "static/chunks/node_modules_f07615._.js",
       "static/chunks/node_modules_axios_lib_999991._.js",
-      "static/chunks/node_modules_7725b0._.js",
-      "static/chunks/app_dashboard_page_tsx_d74665._.js",
+      "static/chunks/node_modules_1d0a96._.js",
+      "static/chunks/app_dashboard_page_tsx_6ca8cb._.js",
       "static/chunks/node_modules_next_dist_compiled_react_a1d82d._.js",
       "static/chunks/node_modules_next_dist_compiled_react-dom_cjs_react-dom_development_c9a189.js",
       "static/chunks/node_modules_next_dist_compiled_react-dom_87a050._.js",
@@ -45,23 +45,13 @@
       "static/chunks/node_modules_next_dist_esm_build_templates_app-page_9facbe.js",
       "static/chunks/node_modules_next_dist_esm_build_templates_app-page_56beff.js"
     ],
-    "/item-trends/page": [
+    "/login/page": [
       "static/chunks/app_globals_73c377.css",
       "static/chunks/node_modules_next_dist_986f43._.js",
       "static/chunks/app_827800._.js",
       "static/chunks/app_layout_tsx_fce82f._.js",
-      "static/chunks/app_dd5583._.js",
-      "static/chunks/node_modules_next_cc4457._.js",
-      "static/chunks/node_modules_axios_lib_999991._.js",
-      "static/chunks/node_modules_chart_666aa2.js",
-      "static/chunks/node_modules_f07615._.js",
-      "static/chunks/node_modules_recharts_es6_util_09a82b._.js",
-      "static/chunks/node_modules_recharts_es6_state_5d0f24._.js",
-      "static/chunks/node_modules_recharts_es6_component_c2eb44._.js",
-      "static/chunks/node_modules_recharts_es6_cartesian_32d53e._.js",
-      "static/chunks/node_modules_recharts_es6_685042._.js",
-      "static/chunks/node_modules_2a1c12._.js",
-      "static/chunks/app_item-trends_page_tsx_f229b7._.js",
+      "static/chunks/_515996._.js",
+      "static/chunks/app_login_page_tsx_5098df._.js",
       "static/chunks/node_modules_next_dist_compiled_react_a1d82d._.js",
       "static/chunks/node_modules_next_dist_compiled_react-dom_cjs_react-dom_development_c9a189.js",
       "static/chunks/node_modules_next_dist_compiled_react-dom_87a050._.js",
@@ -70,8 +60,8 @@
       "static/chunks/node_modules_next_dist_091837._.js",
       "static/chunks/node_modules_@swc_helpers_cjs_00636a._.js",
       "static/chunks/[turbopack]_dev_client_hmr-client_ts_679dd5._.js",
-      "static/chunks/node_modules_next_dist_esm_build_templates_app-page_d085ac.js",
-      "static/chunks/node_modules_next_dist_esm_build_templates_app-page_acf920.js"
+      "static/chunks/node_modules_next_dist_esm_build_templates_app-page_9077e3.js",
+      "static/chunks/node_modules_next_dist_esm_build_templates_app-page_799993.js"
     ]
   }
 }

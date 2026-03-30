@@ -1,13 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import DashboardLayout from '../components/DashboardLayout';
+import { useAuth } from '../store/useAuth';
 
-// import StatsCards from '../components/StatsCards';
-// import CustomerChart from '../components/CustomerChart';
-// import LocationChart from '../components/LocationChart';
-// import TrendingProductsChart from '../components/TrendingProductsChart';
-// import PromotionImpactChart from '../components/PromotionImpactChart';
 import StatsCards from './StatsCards';
 import CustomerChart from './CustomerChart';
 import LocationChart from './LocationChart';
@@ -17,7 +14,19 @@ import RfmSegmentsChart from './RfmSegmentsChart';
 import ProductPerformanceChart from './ProductPerformanceChart';
 import InventoryMetricsChart from './InventoryMetricsChart';
 
+const ALLOWED_ROLES = ['executive', 'regional_manager', 'store_manager', 'admin'];
+
 const ItemTrends = () => {
+  const router = useRouter();
+  const { user } = useAuth();
+  const isStoreManager = user?.role === 'store_manager';
+
+  useEffect(() => {
+    if (user && !ALLOWED_ROLES.includes(user.role)) {
+      router.replace('/dashboard');
+    }
+  }, [user, router]);
+
   const [tempYear, setTempYear] = useState<string>('ALL');
   const [appliedYear, setAppliedYear] = useState<string>('ALL');
 
@@ -26,6 +35,16 @@ const ItemTrends = () => {
   const handleApplyFilter = () => {
     setAppliedYear(tempYear);
   };
+
+  if (!user || !ALLOWED_ROLES.includes(user.role)) {
+    return (
+      <DashboardLayout>
+        <div className="flex items-center justify-center h-[60vh] text-slate-500">
+          Đang chuyển hướng...
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>
@@ -39,7 +58,8 @@ const ItemTrends = () => {
           </p>
         </div>
 
-        {/* FILTER */}
+        {/* FILTER — hidden for store_manager (only inventory relevant) */}
+        {!isStoreManager && (
         <div className="flex flex-wrap items-center gap-3 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
           <select
             className="border p-2 rounded"
@@ -61,8 +81,10 @@ const ItemTrends = () => {
             Apply
           </button>
         </div>
+        )}
 
-        {/* ── Phân tích theo năm ── */}
+        {/* ── Phân tích theo năm — hidden for store_manager ── */}
+        {!isStoreManager && (
         <section className="space-y-6">
           <div className="flex items-center gap-2">
             <h2 className="text-lg font-semibold text-slate-800">Phân tích theo năm</h2>
@@ -78,15 +100,20 @@ const ItemTrends = () => {
           </div>
           <LocationChart selectedYear={appliedYear} />
         </section>
+        )}
 
         {/* ── Phân tích tổng hợp (không bị ảnh hưởng bởi filter) ── */}
         <section className="space-y-6">
           <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold text-slate-800">Phân tích tổng hợp</h2>
-            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-slate-100 text-slate-500">Toàn thời gian</span>
+            <h2 className="text-lg font-semibold text-slate-800">
+              {isStoreManager ? 'Quản lý Tồn kho Cửa hàng' : 'Phân tích tổng hợp'}
+            </h2>
+            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-slate-100 text-slate-500">
+              {isStoreManager ? 'Safety Stock & Stockout' : 'Toàn thời gian'}
+            </span>
           </div>
-          <RfmSegmentsChart />
-          <ProductPerformanceChart />
+          {!isStoreManager && <RfmSegmentsChart />}
+          {!isStoreManager && <ProductPerformanceChart />}
           <InventoryMetricsChart />
         </section>
 

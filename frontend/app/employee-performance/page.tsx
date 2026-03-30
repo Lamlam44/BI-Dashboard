@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import DashboardLayout from '../components/DashboardLayout';
 import { useRefresh } from '../components/RefreshProvider';
+import { authHeaders } from '../lib/api';
 import CapabilityPanel from './components/CapabilityPanel';
 import FiltersBar from './components/FiltersBar';
 import KpiCards from './components/KpiCards';
@@ -25,7 +26,7 @@ async function fetchJsonWithTimeout<T>(url: string, timeoutMs = 600000): Promise
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { signal: controller.signal });
+    const res = await fetch(url, { signal: controller.signal, headers: authHeaders() });
     if (!res.ok) {
       throw new Error(`Request failed (${res.status})`);
     }
@@ -70,7 +71,7 @@ export default function EmployeePerformancePage() {
 
     async function loadFilters() {
       try {
-        const res = await fetch(`${API_BASE_URL}/employee-performance/filters`);
+        const res = await fetch(`${API_BASE_URL}/employee-performance/filters`, { headers: authHeaders() });
         if (!res.ok) throw new Error('Failed to load filter options');
         const data = (await res.json()) as EmployeeFiltersResponse;
         if (mounted) {

@@ -1,13 +1,18 @@
 import logging
 import threading
-from typing import Optional
+from typing import List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 try:
-    from db_utils import serialize_payload
+    from db_utils import serialize_payload, get_engine
 except ImportError:
-    from ..db_utils import serialize_payload
+    from ..db_utils import serialize_payload, get_engine
+
+try:
+    from auth import UserContext, get_current_user, get_rls_store_keys
+except ImportError:
+    from ..auth import UserContext, get_current_user, get_rls_store_keys
 
 from .service import (
     get_sales_profit_dashboard,
@@ -37,13 +42,26 @@ def sale_profit_startup_warmup() -> None:
 
 
 @router.get("/api/dashboard/sales")
-def sale_profit_dashboard(start_date: Optional[str] = None, end_date: Optional[str] = None):
-    payload = get_sales_profit_dashboard(start_date=start_date, end_date=end_date)
+def sale_profit_dashboard(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    store_key: Optional[int] = None,
+    user: UserContext = Depends(get_current_user),
+):
+    rls_keys = get_rls_store_keys(get_engine(), user)
+    # If user explicitly passes store_key AND it's allowed by RLS, use it.
+    effective_store_key = store_key
+    if rls_keys is not None and store_key is not None and store_key not in rls_keys:
+        effective_store_key = rls_keys[0] if rls_keys else None
+    payload = get_sales_profit_dashboard(
+        start_date=start_date, end_date=end_date,
+        store_key=effective_store_key, rls_store_keys=rls_keys,
+    )
     return serialize_payload(payload)
 
 
 @router.post("/cache/refresh")
-def sale_profit_refresh_cache():
+def sale_profit_refresh_cache(user: UserContext = Depends(get_current_user)):
     threading.Thread(target=_warm_cache_background, daemon=True).start()
     return serialize_payload({
         "status": "accepted",
@@ -52,24 +70,44 @@ def sale_profit_refresh_cache():
 
 
 @router.get("/api/channels")
-def sale_profit_channels(start_date: Optional[str] = None, end_date: Optional[str] = None):
-    payload = get_channel_breakdown(start_date=start_date, end_date=end_date)
+def sale_profit_channels(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    user: UserContext = Depends(get_current_user),
+):
+    rls_keys = get_rls_store_keys(get_engine(), user)
+    payload = get_channel_breakdown(start_date=start_date, end_date=end_date, rls_store_keys=rls_keys)
     return serialize_payload(payload)
 
 
 @router.get("/api/kpi-summary")
-def sale_profit_kpi_summary(start_date: Optional[str] = None, end_date: Optional[str] = None):
-    payload = get_kpi_summary(start_date=start_date, end_date=end_date)
+def sale_profit_kpi_summary(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    user: UserContext = Depends(get_current_user),
+):
+    rls_keys = get_rls_store_keys(get_engine(), user)
+    payload = get_kpi_summary(start_date=start_date, end_date=end_date, rls_store_keys=rls_keys)
     return serialize_payload(payload)
 
 
 @router.get("/api/sales-per-sqft")
-def sale_profit_sales_per_sqft(start_date: Optional[str] = None, end_date: Optional[str] = None):
-    payload = get_sales_per_sqft(start_date=start_date, end_date=end_date)
+def sale_profit_sales_per_sqft(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    user: UserContext = Depends(get_current_user),
+):
+    rls_keys = get_rls_store_keys(get_engine(), user)
+    payload = get_sales_per_sqft(start_date=start_date, end_date=end_date, rls_store_keys=rls_keys)
     return serialize_payload(payload)
 
 
 @router.get("/api/budget-vs-actual")
-def sale_profit_budget_vs_actual(start_date: Optional[str] = None, end_date: Optional[str] = None):
-    payload = get_budget_vs_actual(start_date=start_date, end_date=end_date)
+def sale_profit_budget_vs_actual(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    user: UserContext = Depends(get_current_user),
+):
+    rls_keys = get_rls_store_keys(get_engine(), user)
+    payload = get_budget_vs_actual(start_date=start_date, end_date=end_date, rls_store_keys=rls_keys)
     return serialize_payload(payload)
