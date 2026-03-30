@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import logging
 import time
 import threading
@@ -134,7 +134,12 @@ def load_sales_profit_snapshot(force_refresh: bool = False) -> pd.DataFrame:
     return _build_sales_profit_snapshot()
 
 
-def get_sales_profit_dashboard(start_date: Optional[str] = None, end_date: Optional[str] = None) -> Dict[str, Any]:
+def get_sales_profit_dashboard(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    store_key: Optional[int] = None,
+    rls_store_keys: Optional[List[int]] = None,
+) -> Dict[str, Any]:
     snapshot = load_sales_profit_snapshot(force_refresh=False)
     if snapshot.empty:
         return {
@@ -162,6 +167,12 @@ def get_sales_profit_dashboard(start_date: Optional[str] = None, end_date: Optio
         df = df[df["Date"] >= pd.to_datetime(start_date)]
     if end_date:
         df = df[df["Date"] <= pd.to_datetime(end_date)]
+
+    # RLS filter
+    if rls_store_keys is not None:
+        df = df[df["StoreKey"].isin(rls_store_keys)]
+    if store_key is not None:
+        df = df[df["StoreKey"] == store_key]
 
     if df.empty:
         return {
@@ -258,15 +269,19 @@ def get_sales_profit_dashboard(start_date: Optional[str] = None, end_date: Optio
     }
 
 
-def get_channel_breakdown(start_date: Optional[str] = None, end_date: Optional[str] = None) -> Dict[str, Any]:
+def get_channel_breakdown(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    rls_store_keys: Optional[List[int]] = None,
+) -> Dict[str, Any]:
     """Revenue split between offline and online channels.
     When date filters are provided, queries live from fact tables.
     Otherwise falls back to pre-aggregated agg_channel_summary.
     """
     engine = get_engine()
 
-    if start_date or end_date:
-        # Live query with date filter
+    if start_date or end_date or rls_store_keys is not None:
+        # Live query with date filter / RLS
         params: Dict[str, Any] = {}
         where_offline = "1=1"
         where_online = "1=1"
@@ -278,6 +293,10 @@ def get_channel_breakdown(start_date: Optional[str] = None, end_date: Optional[s
             where_offline += " AND s.DateKey <= :end_date"
             where_online += " AND o.DateKey <= :end_date"
             params["end_date"] = end_date
+        if rls_store_keys is not None:
+            keys_csv = ",".join(str(k) for k in rls_store_keys) if rls_store_keys else "0"
+            where_offline += f" AND s.StoreKey IN ({keys_csv})"
+            where_online += f" AND o.StoreKey IN ({keys_csv})"
 
         query = text(f"""
             SELECT 'Offline' AS channel,
@@ -319,12 +338,16 @@ def get_channel_breakdown(start_date: Optional[str] = None, end_date: Optional[s
     return {"status": "success", "channels": rows, "total_revenue": total_rev}
 
 
-def get_kpi_summary(start_date: Optional[str] = None, end_date: Optional[str] = None) -> Dict[str, Any]:
+def get_kpi_summary(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    rls_store_keys: Optional[List[int]] = None,
+) -> Dict[str, Any]:
     """Return KPI summary. When date filters are provided, computes live from snapshot.
     Without filters, uses the pre-aggregated agg_kpi_summary table (fast path).
     """
-    if start_date or end_date:
-        # Live computation from snapshot with date filter
+    if start_date or end_date or rls_store_keys is not None:
+        # Live computation from snapshot with date/RLS filter
         snapshot = load_sales_profit_snapshot(force_refresh=False)
         if snapshot.empty:
             return {"status": "empty", "source": "live", "kpis": {}}
@@ -338,6 +361,8 @@ def get_kpi_summary(start_date: Optional[str] = None, end_date: Optional[str] = 
             df = df[df["Date"] >= pd.to_datetime(start_date)]
         if end_date:
             df = df[df["Date"] <= pd.to_datetime(end_date)]
+        if rls_store_keys is not None:
+            df = df[df["StoreKey"].isin(rls_store_keys)]
 
         if df.empty:
             return {"status": "empty", "source": "live", "kpis": {}}
@@ -405,7 +430,11 @@ def refresh_sales_profit_cache() -> Dict[str, Any]:
     }
 
 
-def get_sales_per_sqft(start_date: Optional[str] = None, end_date: Optional[str] = None) -> Dict[str, Any]:
+def get_sales_per_sqft(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    rls_store_keys: Optional[List[int]] = None,
+) -> Dict[str, Any]:
     """VĐ-2: Sales per Square Foot by store."""
     engine = get_engine()
     params: Dict[str, Any] = {}
@@ -416,6 +445,9 @@ def get_sales_per_sqft(start_date: Optional[str] = None, end_date: Optional[str]
     if end_date:
         where += " AND s.DateKey <= :end_date"
         params["end_date"] = end_date
+    if rls_store_keys is not None:
+        keys_csv = ",".join(str(k) for k in rls_store_keys) if rls_store_keys else "0"
+        where += f" AND s.StoreKey IN ({keys_csv})"
 
     query = text(f"""
         SELECT
@@ -457,7 +489,11 @@ def get_sales_per_sqft(start_date: Optional[str] = None, end_date: Optional[str]
     return {"status": "success", "stores": stores, "avg_sales_per_sqft": round(avg, 2)}
 
 
-def get_budget_vs_actual(start_date: Optional[str] = None, end_date: Optional[str] = None) -> Dict[str, Any]:
+def get_budget_vs_actual(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    rls_store_keys: Optional[List[int]] = None,
+) -> Dict[str, Any]:
     """VĐ-8: Budget vs Actual from FactSalesQuota vs summary_daily_sales."""
     engine = get_engine()
     params: Dict[str, Any] = {}
@@ -471,6 +507,10 @@ def get_budget_vs_actual(start_date: Optional[str] = None, end_date: Optional[st
         where_actual += " AND s.DateKey <= :end_date"
         where_quota += " AND q.DateKey <= :end_date"
         params["end_date"] = end_date
+    if rls_store_keys is not None:
+        keys_csv = ",".join(str(k) for k in rls_store_keys) if rls_store_keys else "0"
+        where_actual += f" AND s.StoreKey IN ({keys_csv})"
+        where_quota += f" AND q.StoreKey IN ({keys_csv})"
 
     query = text(f"""
         SELECT

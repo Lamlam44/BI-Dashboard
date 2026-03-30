@@ -20,6 +20,8 @@ import {
 } from 'recharts';
 import KpiSummaryCards from './KpiSummaryCards';
 import { SalesPerSqftChart, BudgetVsActualChart, StockoutRateChart, SafetyStockChart } from './AdvancedKpiCharts';
+import { authHeaders } from '../lib/api';
+import { useAuth } from '../store/useAuth';
 
 type SalesDashboardResponse = {
   status: 'success' | 'empty' | 'error';
@@ -79,7 +81,7 @@ async function fetchJsonWithTimeout<T>(url: string, timeoutMs = 120000): Promise
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, { signal: controller.signal, headers: authHeaders() });
     if (!response.ok) {
       throw new Error(`Failed to load sales dashboard (${response.status})`);
     }
@@ -120,6 +122,12 @@ function presetToRange(key: PresetKey): { start: string | null; end: string | nu
 
 const Dashboard = () => {
   const { refreshTick, realtimeSummary } = useRefresh();
+  const { user } = useAuth();
+  const role = user?.role || 'store_manager';
+  const isStoreManager = role === 'store_manager';
+  const isRegionalManager = role === 'regional_manager';
+  const showMultiStoreCharts = !isStoreManager; // pie, sqft, budget
+  const showGlobalCharts = role === 'executive' || role === 'admin'; // channel, stockout, safety, realtime, KPI agg
   const [data, setData] = useState<SalesDashboardResponse | null>(null);
   const [channelData, setChannelData] = useState<ChannelResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -154,10 +162,12 @@ const Dashboard = () => {
             buildQS(`${API_BASE_URL}/sale-profit/api/dashboard/sales`),
             180000,
           ),
-          fetchJsonWithTimeout<ChannelResponse>(
-            buildQS(`${API_BASE_URL}/sale-profit/api/channels`),
-            60000,
-          ).catch(() => null),
+          showGlobalCharts
+            ? fetchJsonWithTimeout<ChannelResponse>(
+                buildQS(`${API_BASE_URL}/sale-profit/api/channels`),
+                60000,
+              ).catch(() => null)
+            : Promise.resolve(null),
         ]);
         if (mounted) {
           setData(salesPayload);
@@ -246,8 +256,8 @@ const Dashboard = () => {
         {loading && <p className="text-sm text-slate-500">Loading sales dashboard...</p>}
         {error && <p className="text-sm text-red-600">{error}</p>}
 
-        {/* ── Realtime Today (SSE-driven) ── */}
-        {realtimeSummary && (
+        {/* ── Realtime Today (SSE-driven) — executive & admin only ── */}
+        {showGlobalCharts && realtimeSummary && (
           <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-5">
             <div className="flex items-center gap-2 mb-3">
               <span className="relative flex h-2.5 w-2.5">
@@ -337,10 +347,12 @@ const Dashboard = () => {
           ))}
         </div>
 
-        {/* KPI Summary from Aggregate Tables */}
-        <KpiSummaryCards startDate={dateRange.start} endDate={dateRange.end} />
+        {/* KPI Summary from Aggregate Tables — executive & admin only */}
+        {showGlobalCharts && (
+          <KpiSummaryCards startDate={dateRange.start} endDate={dateRange.end} />
+        )}
 
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <div className={`grid grid-cols-1 ${showMultiStoreCharts ? 'xl:grid-cols-2' : ''} gap-6`}>
           <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm">
             <h2 className="text-lg font-bold text-slate-900 mb-4">Sales Trend</h2>
             <div className="h-72">
@@ -361,6 +373,8 @@ const Dashboard = () => {
             </div>
           </div>
 
+          {/* Top Stores pie — hide for store_manager (only 1 store = meaningless) */}
+          {showMultiStoreCharts && (
           <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm">
             <h2 className="text-lg font-bold text-slate-900 mb-4">Top Stores by Sales</h2>
             <div className="h-72">
@@ -389,10 +403,11 @@ const Dashboard = () => {
               ))}
             </div>
           </div>
+          )}
         </div>
 
-        {/* Channel Breakdown */}
-        {channelData && channelData.channels && channelData.channels.length > 0 && (
+        {/* Channel Breakdown — executive & admin only */}
+        {showGlobalCharts && channelData && channelData.channels && channelData.channels.length > 0 && (
           <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-bold text-slate-900">Channel Breakdown (Online vs Offline)</h2>
@@ -454,16 +469,21 @@ const Dashboard = () => {
           </div>
         )}
 
-        {/* Advanced KPIs Row */}
+        {/* Advanced KPIs Row — hide for store_manager (single store = not meaningful) */}
+        {showMultiStoreCharts && (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
           <SalesPerSqftChart startDate={dateRange.start} endDate={dateRange.end} />
           <BudgetVsActualChart startDate={dateRange.start} endDate={dateRange.end} />
         </div>
+        )}
 
+        {/* Stockout & Safety Stock — executive & admin only (inventory metrics) */}
+        {showGlobalCharts && (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
           <StockoutRateChart />
           <SafetyStockChart />
         </div>
+        )}
           </>
         )}
       </div>

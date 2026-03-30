@@ -9,9 +9,21 @@ import {
   Sparkles,
   Database,
 } from 'lucide-react';
+import { useAuth } from '../store/useAuth';
+
+/** Which roles can see each page */
+const ROLE_ACCESS: Record<string, string[]> = {
+  '/dashboard':              ['executive', 'regional_manager', 'store_manager', 'admin'],
+  '/item-trends':            ['executive', 'regional_manager', 'store_manager', 'admin'],
+  '/employee-performance':   ['executive', 'regional_manager', 'admin'],
+  '/forecasting':            ['executive', 'admin'],
+  '/data-management':        ['admin'],
+};
 
 const Sidebar = () => {
   const pathname = usePathname();
+  const { user } = useAuth();
+  const role = user?.role || 'store_manager';
 
   const navItems = [
     { href: '/dashboard', label: 'Sales & Profit', icon: BarChart3 },
@@ -19,7 +31,7 @@ const Sidebar = () => {
     { href: '/employee-performance', label: 'Employee Performance', icon: Users },
     { href: '/forecasting', label: 'AI Forecasting', icon: Sparkles },
     { href: '/data-management', label: 'Data Management', icon: Database },
-  ];
+  ].filter(item => (ROLE_ACCESS[item.href] || []).includes(role));
 
   const isActive = (href: string) => {
     if (href === '/dashboard') {

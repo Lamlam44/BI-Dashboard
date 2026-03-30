@@ -20,6 +20,7 @@ os.chdir(current_dir)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+from auth_api import router as auth_router
 from data_management.main import app as data_app
 from demand_forecasting.app.main import app as forecast_app
 from item_trends.main import app as trends_app
@@ -49,6 +50,7 @@ app.mount("/realtime", realtime_app)
 app.mount("/data", data_app)
 app.mount("/forecast", forecast_app)
 app.mount("/trends", trends_app)
+app.include_router(auth_router)
 app.include_router(employee_performance_router)
 app.include_router(sale_profit_router)
 
@@ -81,6 +83,7 @@ def root():
         "message": "BI Dashboard Backend is running.",
         "version": "5.0.0",
         "services": {
+            "auth": "/auth",
             "realtime": "/realtime",
             "data_management": "/data",
             "demand_forecasting": "/forecast",
