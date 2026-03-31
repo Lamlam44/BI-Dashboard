@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import DashboardLayout from "../components/DashboardLayout";
+import Section from "../components/Section";
 import { useRefresh } from "../components/RefreshProvider";
 import {
   CartesianGrid,
@@ -209,27 +210,28 @@ export default function ForecastingClient() {
 
         {error && <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-lg">{error}</div>}
 
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div className="bg-white border rounded-xl p-4">
-            <p className="text-xs text-slate-500">Forecast Total Demand ({horizonDays}d)</p>
-            <p className="text-2xl font-bold text-slate-900">{overview?.forecast_total_demand?.toLocaleString() ?? "-"}</p>
+        <Section title="📊 Tổng quan Dự báo" badge="Horizon: ${horizonDays} ngày">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="bg-white border rounded-xl p-4">
+              <p className="text-xs text-slate-500">Forecast Total Demand ({horizonDays}d)</p>
+              <p className="text-2xl font-bold text-slate-900">{overview?.forecast_total_demand?.toLocaleString() ?? "-"}</p>
+            </div>
+            <div className="bg-white border rounded-xl p-4">
+              <p className="text-xs text-slate-500">SKU Count</p>
+              <p className="text-2xl font-bold text-slate-900">{overview?.sku_count?.toLocaleString() ?? "-"}</p>
+            </div>
+            <div className="bg-white border rounded-xl p-4">
+              <p className="text-xs text-slate-500">Avg Daily Demand</p>
+              <p className="text-2xl font-bold text-slate-900">{overview?.avg_daily_demand?.toLocaleString() ?? "-"}</p>
+            </div>
+            <div className="bg-white border rounded-xl p-4">
+              <p className="text-xs text-slate-500">Last Data Date</p>
+              <p className="text-2xl font-bold text-slate-900">{overview?.last_data_date ?? "-"}</p>
+            </div>
           </div>
-          <div className="bg-white border rounded-xl p-4">
-            <p className="text-xs text-slate-500">SKU Count</p>
-            <p className="text-2xl font-bold text-slate-900">{overview?.sku_count?.toLocaleString() ?? "-"}</p>
-          </div>
-          <div className="bg-white border rounded-xl p-4">
-            <p className="text-xs text-slate-500">Avg Daily Demand</p>
-            <p className="text-2xl font-bold text-slate-900">{overview?.avg_daily_demand?.toLocaleString() ?? "-"}</p>
-          </div>
-          <div className="bg-white border rounded-xl p-4">
-            <p className="text-xs text-slate-500">Last Data Date</p>
-            <p className="text-2xl font-bold text-slate-900">{overview?.last_data_date ?? "-"}</p>
-          </div>
-        </div>
+        </Section>
 
-        <div className="bg-white border rounded-xl p-4">
-          <h2 className="font-semibold text-slate-800 mb-3">Layer 2 - Hotspots / Alerts</h2>
+        <Section title="🔥 Hotspots / Alerts" badge="Sản phẩm loại A có biến động bất thường">
           <div className="overflow-auto max-h-72">
             <table className="min-w-full text-sm">
               <thead className="sticky top-0 bg-slate-50">
@@ -272,10 +274,9 @@ export default function ForecastingClient() {
               </tbody>
             </table>
           </div>
-        </div>
+        </Section>
 
-        <div className="bg-white border rounded-xl p-4 space-y-3">
-          <h2 className="font-semibold text-slate-800">Layer 3 - Bulk Filter & Action</h2>
+        <Section title="🔍 Bulk Filter & Action" badge="🔗 Lọc theo ABC/XYZ">
           <div className="flex flex-wrap gap-3 items-end">
             <div>
               <label className="block text-xs text-slate-500 mb-1">ABC</label>
@@ -347,10 +348,9 @@ export default function ForecastingClient() {
               </tbody>
             </table>
           </div>
-        </div>
+        </Section>
 
-        <div className="bg-white border rounded-xl p-4">
-          <h2 className="font-semibold text-slate-800 mb-3">Layer 4 - Deep Dive</h2>
+        <Section title="📈 Deep Dive Forecast" badge="Click SKU ở trên để xem dự báo chi tiết">
           {selectedSku ? (
             <>
               <p className="text-sm text-slate-600 mb-4">{deepDiveTitle}</p>
@@ -371,7 +371,7 @@ export default function ForecastingClient() {
           ) : (
             <div className="text-slate-500">Click a SKU from Layer 2 or Layer 3 to open deep-dive forecast.</div>
           )}
-        </div>
+        </Section>
       </div>
     </DashboardLayout>
   );
