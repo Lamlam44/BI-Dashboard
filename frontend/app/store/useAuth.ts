@@ -1,8 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-
-const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { API_BASE_URL } from '../lib/api';
 
 export interface AuthUser {
   id: number;
@@ -32,7 +31,7 @@ export const useAuth = create<AuthState>((set) => ({
   login: async (username: string, password: string) => {
     set({ loading: true, error: null });
     try {
-      const res = await fetch(`${API}/auth/login`, {
+      const res = await fetch(`${API_BASE_URL}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),

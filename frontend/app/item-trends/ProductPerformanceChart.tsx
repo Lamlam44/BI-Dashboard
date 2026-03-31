@@ -3,12 +3,11 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { useRefresh } from '../components/RefreshProvider';
+import { API_BASE_URL } from '../lib/api';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, PieChart, Pie, Cell, Legend,
 } from 'recharts';
-
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
 
 interface Product {
   ProductKey: number;
@@ -47,7 +46,7 @@ export default function ProductPerformanceChart() {
 
   useEffect(() => {
     setLoading(true);
-    axios.get(`${API}/trends/api/product-performance`)
+    axios.get(`${API_BASE_URL}/trends/api/product-performance`)
       .then(res => {
         const d = res.data;
         if (d.status === 'success') {

@@ -3,12 +3,11 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { useRefresh } from '../components/RefreshProvider';
+import { API_BASE_URL } from '../lib/api';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend,
 } from 'recharts';
-
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
 
 interface InvItem {
   ProductKey: number;
@@ -28,7 +27,7 @@ export default function InventoryMetricsChart() {
   useEffect(() => {
     setLoading(true);
     setEmpty(false);
-    axios.get(`${API}/trends/api/inventory-metrics`)
+    axios.get(`${API_BASE_URL}/trends/api/inventory-metrics`)
       .then(res => {
         const d = res.data;
         if (d.status === 'success' && d.data?.length) {

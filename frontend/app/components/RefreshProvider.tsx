@@ -9,7 +9,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
    2) Real-time SSE from /realtime/stream → pushes live metrics
    ────────────────────────────────────────────────────────── */
 
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
+import { API_BASE_URL } from '../lib/api';
 
 export type IntervalOption = 15 | 30 | 60 | 1440; // minutes
 
@@ -95,7 +95,7 @@ export default function RefreshProvider({ children }: { children: React.ReactNod
   useEffect(() => {
     let es: EventSource | null = null;
     try {
-      es = new EventSource(`${API}/realtime/stream`);
+      es = new EventSource(`${API_BASE_URL}/realtime/stream`);
       es.onmessage = (event: MessageEvent) => {
         try {
           const data = JSON.parse(event.data) as RealtimeSummary;

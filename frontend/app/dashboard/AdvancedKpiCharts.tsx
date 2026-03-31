@@ -1,14 +1,12 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import api from '../lib/api';
+import api, { API_BASE_URL } from '../lib/api';
 import { useRefresh } from '../components/RefreshProvider';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
   PieChart, Pie, Cell,
 } from 'recharts';
-
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
 
 const fmtMoney = (v: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v);
@@ -38,7 +36,7 @@ export function SalesPerSqftChart({ startDate, endDate }: DateFilterProps = {}) 
     const params: Record<string, string> = {};
     if (startDate) params.start_date = startDate;
     if (endDate) params.end_date = endDate;
-    api.get(`${API}/sale-profit/api/sales-per-sqft`, { params })
+    api.get(`${API_BASE_URL}/sale-profit/api/sales-per-sqft`, { params })
       .then(res => {
         if (res.data.status === 'success') {
           setStores(res.data.stores.slice(0, 15));
@@ -93,7 +91,7 @@ export function BudgetVsActualChart({ startDate, endDate }: DateFilterProps = {}
     const params: Record<string, string> = {};
     if (startDate) params.start_date = startDate;
     if (endDate) params.end_date = endDate;
-    api.get(`${API}/sale-profit/api/budget-vs-actual`, { params })
+    api.get(`${API_BASE_URL}/sale-profit/api/budget-vs-actual`, { params })
       .then(res => {
         if (res.data.status === 'success') {
           setStores(res.data.stores.slice(0, 10));
@@ -149,7 +147,7 @@ export function StockoutRateChart() {
 
   useEffect(() => {
     setLoading(true);
-    api.get(`${API}/data/api/stockout-rate`)
+    api.get(`${API_BASE_URL}/data/api/stockout-rate`)
       .then(res => {
         if (res.data.status === 'success') setData(res.data);
       })
@@ -228,7 +226,7 @@ export function SafetyStockChart() {
 
   useEffect(() => {
     setLoading(true);
-    api.get(`${API}/data/api/safety-stock`)
+    api.get(`${API_BASE_URL}/data/api/safety-stock`)
       .then(res => {
         if (res.data.status === 'success') setData(res.data);
       })

@@ -54,7 +54,8 @@ type ForecastPoint = {
   lower_bound: number;
 };
 
-const API_BASE = "http://127.0.0.1:8000/forecast";
+import { API_BASE_URL } from '../lib/api';
+const API_BASE = `${API_BASE_URL}/forecast`;
 
 async function fetchJsonWithTimeout(url: string, timeoutMs = 600000, options?: RequestInit) {
   const controller = new AbortController();

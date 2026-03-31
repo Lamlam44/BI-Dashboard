@@ -11,9 +11,8 @@ import {
 } from 'lucide-react';
 import axios from 'axios';
 import { useAuth } from '../store/useAuth';
-
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
-const DM_API = `${API}/data`;
+import { API_BASE_URL } from '../lib/api';
+const DM_API = `${API_BASE_URL}/data`;
 
 // ═══════════════════════════════════════════════════════════════
 // Types

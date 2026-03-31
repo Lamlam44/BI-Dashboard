@@ -4,10 +4,9 @@ import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Toolti
 import { Bar } from 'react-chartjs-2';
 import axios from 'axios';
 import { useRefresh } from '../components/RefreshProvider';
+import { API_BASE_URL } from '../lib/api';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
-
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
 
 interface Props {
   selectedYear: string;
@@ -18,7 +17,7 @@ export default function PromotionImpactChart({ selectedYear }: Props) {
   const [chartData, setChartData] = useState<any>(null);
 
   useEffect(() => {
-    let url = `${API}/trends/api/promotion-impact`;
+    let url = `${API_BASE_URL}/trends/api/promotion-impact`;
     if (selectedYear !== 'ALL') {
       url += `?start_date=${selectedYear}-01-01&end_date=${selectedYear}-12-31`;
     }

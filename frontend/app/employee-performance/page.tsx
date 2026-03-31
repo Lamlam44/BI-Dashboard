@@ -21,7 +21,7 @@ import {
   TrendResponse,
 } from './components/types';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
+import { API_BASE_URL } from '../lib/api';
 
 async function fetchJsonWithTimeout<T>(url: string, timeoutMs = 600000): Promise<T> {
   const controller = new AbortController();

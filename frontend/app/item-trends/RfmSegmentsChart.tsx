@@ -11,8 +11,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
+import { API_BASE_URL } from '../lib/api';
 
 interface RfmSegment {
   rfm_segment: string;
@@ -42,7 +41,7 @@ export default function RfmSegmentsChart() {
 
   useEffect(() => {
     setLoading(true);
-    fetch(`${API_BASE}/data/api/rfm-segments`)
+    fetch(`${API_BASE_URL}/data/api/rfm-segments`)
       .then((res) => res.json())
       .then((data) => {
         if (data.status === 'success' && data.segments) {

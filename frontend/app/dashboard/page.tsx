@@ -31,7 +31,7 @@ type ChRes = {
 };
 
 /* ── Helpers ────────────────────────────────────────── */
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
+import { API_BASE_URL } from '../lib/api';
 const PIE_COLORS = ['#0ea5e9', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#14b8a6', '#64748b'];
 
 const fmt$ = (v: number) =>
@@ -122,8 +122,8 @@ export default function Dashboard() {
       setLoading(true); setError(null);
       try {
         const [s, c] = await Promise.all([
-          fetchJ<DashRes>(qs(`${API}/sale-profit/api/dashboard/sales`), 180_000),
-          showGlobal ? fetchJ<ChRes>(qs(`${API}/sale-profit/api/channels`), 60_000).catch(() => null) : null,
+          fetchJ<DashRes>(qs(`${API_BASE_URL}/sale-profit/api/dashboard/sales`), 180_000),
+          showGlobal ? fetchJ<ChRes>(qs(`${API_BASE_URL}/sale-profit/api/channels`), 60_000).catch(() => null) : null,
         ]);
         if (ok) { setData(s); if (c) setChData(c); }
       } catch (e) { if (ok) setError((e as Error).message); }

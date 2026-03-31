@@ -5,12 +5,11 @@ import { Doughnut } from 'react-chartjs-2';
 import ChartDataLabels from 'chartjs-plugin-datalabels'; // Import Plugin mới
 import axios from 'axios';
 import { useRefresh } from '../components/RefreshProvider';
+import { API_BASE_URL } from '../lib/api';
 
 // Đăng ký các thành phần bao gồm cả ChartDataLabels
 //ChartJS.register(ArcElement, Tooltip, Legend, ChartDataLabels);
 ChartJS.register(ArcElement, Tooltip, Legend);
-
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
 
 interface ApiResponse {
   labels: string[];
@@ -32,7 +31,7 @@ export default function CustomerChart({ selectedYear }: Props) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    let url = `${API}/trends/api/customer-segments`;
+    let url = `${API_BASE_URL}/trends/api/customer-segments`;
     if (selectedYear !== 'ALL') {
       url += `?start_date=${selectedYear}-01-01&end_date=${selectedYear}-12-31`;
     }

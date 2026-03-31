@@ -1,10 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import api from '../lib/api';
+import api, { API_BASE_URL } from '../lib/api';
 import { useRefresh } from '../components/RefreshProvider';
-
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
 
 interface KpiData {
   total_revenue: number;
@@ -39,7 +37,7 @@ export default function KpiSummaryCards({ startDate, endDate }: KpiSummaryCardsP
     const params: Record<string, string> = {};
     if (startDate) params.start_date = startDate;
     if (endDate) params.end_date = endDate;
-    api.get(`${API}/sale-profit/api/kpi-summary`, { params })
+    api.get(`${API_BASE_URL}/sale-profit/api/kpi-summary`, { params })
       .then(res => {
         const d = res.data;
         if (d.status === 'success' && d.kpis) {

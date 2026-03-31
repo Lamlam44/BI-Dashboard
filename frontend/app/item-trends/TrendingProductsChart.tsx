@@ -2,8 +2,7 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { useRefresh } from '../components/RefreshProvider';
-
-const API = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://127.0.0.1:8000';
+import { API_BASE_URL } from '../lib/api';
 
 interface Props {
   selectedYear: string;
@@ -21,7 +20,7 @@ export default function TopTrendingList({ selectedYear }: Props) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    let url = `${API}/trends/api/trending-products`;
+    let url = `${API_BASE_URL}/trends/api/trending-products`;
     if (selectedYear !== 'ALL') {
       url += `?start_date=${selectedYear}-01-01&end_date=${selectedYear}-12-31`;
     }
