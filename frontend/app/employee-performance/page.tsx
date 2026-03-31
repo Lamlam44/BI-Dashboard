@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 
 import DashboardLayout from '../components/DashboardLayout';
+import Section from '../components/Section';
 import { useRefresh } from '../components/RefreshProvider';
 import { authHeaders } from '../lib/api';
 import CapabilityPanel from './components/CapabilityPanel';
@@ -170,62 +171,43 @@ export default function EmployeePerformancePage() {
           </p>
         </header>
 
-        <FiltersBar
-          years={filters?.years || []}
-          months={filters?.months || []}
-          employees={filters?.employees || []}
-          selectedYear={selectedYear}
-          selectedMonth={selectedMonth}
-          selectedEmployeeKey={selectedEmployeeKey}
-          onYearChange={setSelectedYear}
-          onMonthChange={setSelectedMonth}
-          onEmployeeChange={setSelectedEmployeeKey}
-        />
+        <Section title="🎛 Bộ lọc Nhân viên" badge="Chọn Year, Month, Manager để lọc dữ liệu bên dưới">
+          <FiltersBar
+            years={filters?.years || []}
+            months={filters?.months || []}
+            employees={filters?.employees || []}
+            selectedYear={selectedYear}
+            selectedMonth={selectedMonth}
+            selectedEmployeeKey={selectedEmployeeKey}
+            onYearChange={setSelectedYear}
+            onMonthChange={setSelectedMonth}
+            onEmployeeChange={setSelectedEmployeeKey}
+          />
+        </Section>
 
         {loading && <p className="text-sm text-slate-500">Loading employee performance data...</p>}
         {error && <p className="text-sm text-red-600">{error}</p>}
 
         {!loading && !error && (
           <>
-            {/* Section 1: Chịu ảnh hưởng bởi tất cả filter (Year + Month + Manager) */}
-            <section className="space-y-4">
-              <div className="flex items-center gap-2">
-                <h2 className="text-lg font-semibold text-slate-800">Tổng quan hiệu suất</h2>
-                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-700">Year</span>
-                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-emerald-100 text-emerald-700">Month</span>
-                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-violet-100 text-violet-700">Manager</span>
-              </div>
+            <Section title="📊 Tổng quan Hiệu suất" badge="🔗 Year + Month + Manager">
               <KpiCards data={dashboard} />
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <TopPerformerCard data={dashboard} />
                 <CapabilityPanel items={dashboard?.capabilities || []} />
               </div>
-            </section>
+            </Section>
 
-            {/* Section 2: Year + Manager (Month không ảnh hưởng) */}
-            <section className="space-y-4">
-              <div className="flex items-center gap-2">
-                <h2 className="text-lg font-semibold text-slate-800">Xu hướng theo thời gian</h2>
-                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-700">Year</span>
-                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-violet-100 text-violet-700">Manager</span>
-                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-slate-100 text-slate-400 line-through">Month</span>
-              </div>
+            <Section title="📈 Xu hướng theo Thời gian" badge="🔗 Year + Manager (Month không ảnh hưởng)">
               <TrendChart data={trend} />
-            </section>
+            </Section>
 
-            {/* Section 3: Year + Month (Manager không ảnh hưởng) */}
-            <section className="space-y-4">
-              <div className="flex items-center gap-2">
-                <h2 className="text-lg font-semibold text-slate-800">Bảng xếp hạng & Phân tích</h2>
-                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-700">Year</span>
-                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-emerald-100 text-emerald-700">Month</span>
-                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-slate-100 text-slate-400 line-through">Manager</span>
-              </div>
+            <Section title="🏆 Bảng xếp hạng & Phân tích" badge="🔗 Year + Month (Manager không ảnh hưởng)">
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                 <LeaderboardTable data={leaderboard} />
                 <ScatterChart data={scatter} />
               </div>
-            </section>
+            </Section>
           </>
         )}
       </div>

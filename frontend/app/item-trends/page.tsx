@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import DashboardLayout from '../components/DashboardLayout';
+import Section from '../components/Section';
 import { useAuth } from '../store/useAuth';
 
 import StatsCards from './StatsCards';
@@ -58,39 +59,17 @@ const ItemTrends = () => {
           </p>
         </div>
 
-        {/* FILTER — hidden for store_manager (only inventory relevant) */}
+        {/* FILTER + YEAR ANALYSIS — hidden for store_manager */}
         {!isStoreManager && (
-        <div className="flex flex-wrap items-center gap-3 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-          <select
-            className="border p-2 rounded"
-            value={tempYear}
-            onChange={(e) => setTempYear(e.target.value)}
-          >
-            <option value="ALL">All Years</option>
-            {availableYears.map((year) => (
-              <option key={year} value={year}>
-                Năm {year}
-              </option>
-            ))}
-          </select>
-
-          <button
-            onClick={handleApplyFilter}
-            className="bg-blue-600 text-white px-4 py-2 rounded"
-          >
-            Apply
-          </button>
-        </div>
-        )}
-
-        {/* ── Phân tích theo năm — hidden for store_manager ── */}
-        {!isStoreManager && (
-        <section className="space-y-6">
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold text-slate-800">Phân tích theo năm</h2>
-            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-blue-100 text-blue-700">
-              {appliedYear === 'ALL' ? 'Tất cả năm' : `Năm ${appliedYear}`}
-            </span>
+        <Section title="📅 Phân tích theo Năm" badge="🔗 Lọc theo năm đã chọn">
+          <div className="flex flex-wrap items-center gap-3">
+            <select className="border p-2 rounded" value={tempYear} onChange={(e) => setTempYear(e.target.value)}>
+              <option value="ALL">All Years</option>
+              {availableYears.map((year) => (
+                <option key={year} value={year}>Năm {year}</option>
+              ))}
+            </select>
+            <button onClick={handleApplyFilter} className="bg-blue-600 text-white px-4 py-2 rounded">Apply</button>
           </div>
           <StatsCards selectedYear={appliedYear} />
           <CustomerChart selectedYear={appliedYear} />
@@ -99,23 +78,18 @@ const ItemTrends = () => {
             <PromotionImpactChart selectedYear={appliedYear} />
           </div>
           <LocationChart selectedYear={appliedYear} />
-        </section>
+        </Section>
         )}
 
-        {/* ── Phân tích tổng hợp (không bị ảnh hưởng bởi filter) ── */}
-        <section className="space-y-6">
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold text-slate-800">
-              {isStoreManager ? 'Quản lý Tồn kho Cửa hàng' : 'Phân tích tổng hợp'}
-            </h2>
-            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-slate-100 text-slate-500">
-              {isStoreManager ? 'Safety Stock & Stockout' : 'Toàn thời gian'}
-            </span>
-          </div>
+        {/* OVERALL ANALYSIS — not filtered by year */}
+        <Section
+          title={isStoreManager ? '📦 Quản lý Tồn kho Cửa hàng' : '📊 Phân tích Tổng hợp'}
+          badge={isStoreManager ? 'Safety Stock & Stockout' : '⚠ Toàn thời gian — Không áp dụng bộ lọc năm'}
+        >
           {!isStoreManager && <RfmSegmentsChart />}
           {!isStoreManager && <ProductPerformanceChart />}
           <InventoryMetricsChart />
-        </section>
+        </Section>
 
       </div>
     </DashboardLayout>
