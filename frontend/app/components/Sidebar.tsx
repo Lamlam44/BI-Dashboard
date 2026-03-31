@@ -9,37 +9,29 @@ import {
   Sparkles,
   Database,
 } from 'lucide-react';
+import { useAuth } from '../store/useAuth';
+
+/** Which roles can see each page */
+const ROLE_ACCESS: Record<string, string[]> = {
+  '/dashboard':              ['executive', 'regional_manager', 'store_manager', 'admin'],
+  '/item-trends':            ['executive', 'regional_manager', 'store_manager', 'admin'],
+  '/employee-performance':   ['executive', 'regional_manager', 'admin'],
+  '/forecasting':            ['executive', 'admin'],
+  '/data-management':        ['admin'],
+};
 
 const Sidebar = () => {
   const pathname = usePathname();
+  const { user } = useAuth();
+  const role = user?.role || 'store_manager';
 
   const navItems = [
-    {
-      href: '/dashboard',
-      label: 'Sales & Profit',
-      icon: BarChart3,
-    },
-    {
-      href: '/item-trends',
-      label: 'Item Trends',
-      icon: TrendingUp,
-    },
-    {
-      href: '/employee-performance',
-      label: 'Employee Performance',
-      icon: Users,
-    },
-    {
-      href: '/forecasting',
-      label: 'AI Forecasting',
-      icon: Sparkles,
-    },
-    {
-      href: '/data-management',
-      label: 'Data Management',
-      icon: Database,
-    },
-  ];
+    { href: '/dashboard', label: 'Sales & Profit', icon: BarChart3 },
+    { href: '/item-trends', label: 'Item Trends', icon: TrendingUp },
+    { href: '/employee-performance', label: 'Employee Performance', icon: Users },
+    { href: '/forecasting', label: 'AI Forecasting', icon: Sparkles },
+    { href: '/data-management', label: 'Data Management', icon: Database },
+  ].filter(item => (ROLE_ACCESS[item.href] || []).includes(role));
 
   const isActive = (href: string) => {
     if (href === '/dashboard') {
@@ -50,7 +42,6 @@ const Sidebar = () => {
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-64 bg-slate-900 text-slate-50 flex flex-col border-r border-slate-800">
-      {/* Logo Section */}
       <div className="p-6 border-b border-slate-800">
         <h1 className="text-2xl font-bold text-white flex items-center gap-3">
           <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center">
@@ -60,7 +51,6 @@ const Sidebar = () => {
         </h1>
       </div>
 
-      {/* Navigation Links */}
       <nav className="flex-1 overflow-y-auto py-6 px-4">
         <ul className="space-y-2">
           {navItems.map(({ href, label, icon: Icon }) => {
@@ -93,7 +83,6 @@ const Sidebar = () => {
         </ul>
       </nav>
 
-      {/* Footer Section */}
       <div className="p-6 border-t border-slate-800">
         <p className="text-xs text-slate-400">
           BI Dashboard v1.0

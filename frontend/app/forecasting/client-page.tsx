@@ -1,248 +1,377 @@
 "use client";
-import React, { useState, useEffect } from "react";
+
+import React, { useEffect, useMemo, useState } from "react";
 import DashboardLayout from "../components/DashboardLayout";
+import Section from "../components/Section";
+import { useRefresh } from "../components/RefreshProvider";
 import {
-  LineChart,
+  CartesianGrid,
+  ComposedChart,
   Line,
+  ResponsiveContainer,
+  Tooltip,
   XAxis,
   YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-  ComposedChart,
   Area,
 } from "recharts";
 
-const generateMockForecastData = (days: number) => {
-  const mockData = [];
-  const today = new Date();
-  let actualValue = 450;
-  let predictedValue = 455;
+type OverviewResponse = {
+  forecast_total_demand: number;
+  sku_count: number;
+  abc_distribution: Record<string, number>;
+  xyz_distribution: Record<string, number>;
+  avg_daily_demand: number;
+  horizon_days: number;
+  last_data_date: string;
+};
 
-  for (let i = 0; i < days; i++) {
-    const date = new Date(today);
-    date.setDate(date.getDate() + i);
-    const dateStr = date.toISOString().split("T")[0];
+type AlertRow = {
+  product_id: number;
+  product_name: string;
+  abc_class: string;
+  xyz_class: string;
+  mean_14: number;
+  mean_90: number;
+  spike_score: number;
+  message: string;
+};
 
-    actualValue += Math.random() * 40 - 20;
-    predictedValue += Math.random() * 50 - 25;
+type BulkRow = {
+  product_id: number;
+  product_name: string;
+  category_key: number;
+  abc_class: string;
+  xyz_class: string;
+  revenue: number;
+  cv: number;
+};
 
-    mockData.push({
-      date: dateStr,
-      actual: parseFloat(actualValue.toFixed(1)),
-      predicted: parseFloat(predictedValue.toFixed(1)),
-      lowerBound: parseFloat((predictedValue - 50).toFixed(1)),
-      upperBound: parseFloat((predictedValue + 50).toFixed(1)),
-    });
+type ForecastPoint = {
+  date: string;
+  actual: number | null;
+  predicted: number;
+  upper_bound: number;
+  lower_bound: number;
+};
+
+const API_BASE = "http://127.0.0.1:8000/forecast";
+
+async function fetchJsonWithTimeout(url: string, timeoutMs = 600000, options?: RequestInit) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...(options || {}), signal: controller.signal });
+    return res;
+  } finally {
+    clearTimeout(timer);
   }
-  return mockData;
+}
+
+type ReadyResponse = {
+  ready: boolean;
+  recalculate_running?: boolean;
 };
 
 export default function ForecastingClient() {
-  const [data, setData] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [productId, setProductId] = useState(310); // Standard demo ID
-  const [forecastSteps, setForecastSteps] = useState(14);
+  const { refreshTick } = useRefresh();
+  const [horizonDays, setHorizonDays] = useState(14);
+  const [overview, setOverview] = useState<OverviewResponse | null>(null);
+  const [alerts, setAlerts] = useState<AlertRow[]>([]);
+  const [bulkRows, setBulkRows] = useState<BulkRow[]>([]);
+  const [selectedSku, setSelectedSku] = useState<number | null>(null);
+  const [deepDiveData, setDeepDiveData] = useState<ForecastPoint[]>([]);
+  const [deepDiveTitle, setDeepDiveTitle] = useState<string>("");
 
-  const handleRefreshAI = async () => {
-    if (!confirm("Hệ thống sẽ tải lại dữ liệu từ Data Warehouse và tiến hành huấn luyện (Retrain) lại toàn bộ mô hình AI. Quá trình này có thể mất một chút thời gian. Bạn chắc chắn muốn tiếp tục?")) return;
-    
-    setIsRefreshing(true);
-    setError(null);
-    try {
-      // Cho thời gian timeout của fetch là 5 phút vì model sẽ cần một chú thời gian để train
-      const response = await fetch(`http://localhost:8002/refresh-ai-data`, {
-        method: "POST",
-      });
-      if (!response.ok) {
-        throw new Error("Có lỗi xảy ra khi làm mới dữ liệu AI từ backend.");
-      }
-      const result = await response.json();
-      alert(result.message || "Thành công lấy dữ liệu và tạo ra file .pkl mới!");
-      fetchForecast(); // tải lại chart
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setIsRefreshing(false);
-    }
+  const [abcFilter, setAbcFilter] = useState<string>("A");
+  const [xyzFilter, setXyzFilter] = useState<string>("ALL");
+  const [isLoadingData, setIsLoadingData] = useState(false);
+  const [isRecalculating, setIsRecalculating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadOverview = async () => {
+    const res = await fetchJsonWithTimeout(`${API_BASE}/overview?horizon_days=${horizonDays}`, 600000);
+    if (!res.ok) throw new Error("Failed to load overview");
+    const data = await res.json();
+    setOverview(data);
   };
 
-  const fetchForecast = async () => {
-    setLoading(true);
+  const loadAlerts = async () => {
+    const res = await fetchJsonWithTimeout(`${API_BASE}/alerts?limit=20&abc_class=A`, 600000);
+    if (!res.ok) throw new Error("Failed to load alerts");
+    const data = await res.json();
+    setAlerts(data.alerts || []);
+  };
+
+  const loadBulk = async () => {
+    const params = new URLSearchParams();
+    if (abcFilter !== "ALL") params.set("abc_class", abcFilter);
+    if (xyzFilter !== "ALL") params.set("xyz_class", xyzFilter);
+    params.set("limit", "300");
+
+    const res = await fetchJsonWithTimeout(`${API_BASE}/bulk/query?${params.toString()}`, 600000);
+    if (!res.ok) throw new Error("Failed to load bulk list");
+    const data = await res.json();
+    setBulkRows(data.items || []);
+  };
+
+  const loadDeepDive = async (productId: number, productName: string) => {
+    const res = await fetchJsonWithTimeout(`${API_BASE}/forecast/${productId}?days_ahead=${horizonDays}`, 600000);
+    if (!res.ok) throw new Error("Failed to load deep-dive forecast");
+    const payload = await res.json();
+    setDeepDiveData(payload.forecast_points || []);
+    setDeepDiveTitle(`${productName} (SKU ${productId})`);
+    setSelectedSku(productId);
+  };
+
+  const refreshAllLayers = async () => {
+    await Promise.all([loadOverview(), loadAlerts(), loadBulk()]);
+  };
+
+  const waitForRecalculateDone = async () => {
+    for (let i = 0; i < 60; i++) {
+      const readyRes = await fetchJsonWithTimeout(`${API_BASE}/ready`, 600000);
+      if (!readyRes.ok) throw new Error("Failed to check recalculation status");
+      const readyData = (await readyRes.json()) as ReadyResponse;
+      if (!readyData.recalculate_running) return;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    throw new Error("Recalculate is taking too long. Please try again in a moment.");
+  };
+
+  const recalculate = async () => {
+    setIsRecalculating(true);
     setError(null);
     try {
-      const response = await fetch(
-        `http://localhost:8002/forecast/${productId}?days_ahead=${forecastSteps}`,
-        { signal: AbortSignal.timeout(5000) },
-      );
-      if (!response.ok) {
-        throw new Error(
-          "Backend temporarily unavailable. Showing sample forecast data.",
-        );
-      }
-      const rawData = await response.json();
-
-      const points = Array.isArray(rawData)
-        ? rawData
-        : rawData.forecast_points || [];
-      const formattedData = points.map((item: any) => ({
-        date: (item.date || item.DateKey || "").split("T")[0],
-        actual: item.actual != null ? parseFloat(item.actual) : null,
-        predicted:
-          item.predicted != null ? parseFloat(item.predicted.toFixed(2)) : null,
-        lowerBound:
-          item.lower_bound != null
-            ? parseFloat(item.lower_bound.toFixed(2))
-            : null,
-        upperBound:
-          item.upper_bound != null
-            ? parseFloat(item.upper_bound.toFixed(2))
-            : null,
-      }));
-
-      setData(formattedData);
-    } catch (err: any) {
-      setError(err.message);
-      // Show sample data as fallback
-      const sampleData = generateMockForecastData(forecastSteps);
-      setData(sampleData);
+      const res = await fetchJsonWithTimeout(`${API_BASE}/recalculate`, 600000, { method: "POST" });
+      if (!res.ok) throw new Error("Recalculate failed");
+      await waitForRecalculateDone();
+      await refreshAllLayers();
+    } catch (e: any) {
+      setError(e.message || "Unknown error");
     } finally {
-      setLoading(false);
+      setIsRecalculating(false);
     }
   };
 
   useEffect(() => {
-    // Fetch real data from backend on mount
-    fetchForecast();
+    setIsLoadingData(true);
+    setError(null);
+    refreshAllLayers()
+      .catch((e: any) => setError(e.message || "Unknown error"))
+      .finally(() => setIsLoadingData(false));
+  }, [horizonDays, refreshTick]);
+
+  useEffect(() => {
+    const syncRecalculateState = async () => {
+      try {
+        const readyRes = await fetchJsonWithTimeout(`${API_BASE}/ready`, 10000);
+        if (!readyRes.ok) return;
+        const readyData = (await readyRes.json()) as ReadyResponse;
+        setIsRecalculating(Boolean(readyData.recalculate_running));
+      } catch {
+        // Keep current UI state on transient readiness check failures.
+      }
+    };
+
+    syncRecalculateState();
   }, []);
+
+  useEffect(() => {
+    loadBulk().catch((e: any) => setError(e.message || "Unknown error"));
+  }, [abcFilter, xyzFilter, refreshTick]);
+
+  const chartData = useMemo(
+    () =>
+      deepDiveData.map((d) => ({
+        date: d.date,
+        predicted: Number(d.predicted ?? 0),
+        upper: Number(d.upper_bound ?? 0),
+        lower: Number(d.lower_bound ?? 0),
+      })),
+    [deepDiveData]
+  );
 
   return (
     <DashboardLayout>
       <div className="space-y-8">
-        <div className="flex justify-between items-center">
+        <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-slate-900">
-              AI Demand Forecasting
-            </h1>
-            <p className="text-slate-600 mt-2">
-              Predictive analytics dynamically connected to the LightGBM Backend
-            </p>
+            <h1 className="text-3xl font-bold text-slate-900">Demand Forecast Control Tower</h1>
+            <p className="text-slate-600 mt-2">Management by objectives and exceptions for 2,000+ SKUs</p>
           </div>
           <button
-            onClick={handleRefreshAI}
-            disabled={isRefreshing}
-            className={`px-4 py-2 text-white font-semibold rounded-lg shadow-sm flex items-center gap-2 
-              ${isRefreshing ? "bg-slate-400 cursor-not-allowed" : "bg-emerald-600 hover:bg-emerald-700"}
-            `}
+            onClick={recalculate}
+            disabled={isLoadingData || isRecalculating}
+            className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-semibold hover:bg-emerald-700 disabled:bg-slate-400"
           >
-            {isRefreshing ? (
-              <>Mô hình AI đang học lại dữ liệu (Retraining)...</>
-            ) : (
-              <>Làm mới & Retrain Dữ liệu AI</>
-            )}
+            {isRecalculating ? "Recalculating..." : isLoadingData ? "Loading..." : "Recalculate All"}
           </button>
         </div>
 
-        <div className="bg-white rounded-lg border border-slate-200 p-6 shadow-sm">
-          <div className="flex gap-4 items-end mb-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Product ID
-              </label>
-              <input
-                type="number"
-                value={productId}
-                onChange={(e) => setProductId(Number(e.target.value))}
-                className="border p-2 rounded w-32"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Days Ahead
-              </label>
-              <input
-                type="number"
-                value={forecastSteps}
-                onChange={(e) => setForecastSteps(Number(e.target.value))}
-                className="border p-2 rounded w-32"
-                min="1"
-                max="30"
-              />
-            </div>
-            <button
-              onClick={fetchForecast}
-              disabled={loading}
-              className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
-            >
-              {loading ? "Calculating..." : "Run AI Model"}
-            </button>
-          </div>
+        {error && <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-lg">{error}</div>}
 
-          {error && (
-            <div className="bg-red-50 text-red-500 p-4 rounded mb-4 border border-red-200">
-              {error}
+        <Section title="📊 Tổng quan Dự báo" badge="Horizon: ${horizonDays} ngày">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="bg-white border rounded-xl p-4">
+              <p className="text-xs text-slate-500">Forecast Total Demand ({horizonDays}d)</p>
+              <p className="text-2xl font-bold text-slate-900">{overview?.forecast_total_demand?.toLocaleString() ?? "-"}</p>
             </div>
+            <div className="bg-white border rounded-xl p-4">
+              <p className="text-xs text-slate-500">SKU Count</p>
+              <p className="text-2xl font-bold text-slate-900">{overview?.sku_count?.toLocaleString() ?? "-"}</p>
+            </div>
+            <div className="bg-white border rounded-xl p-4">
+              <p className="text-xs text-slate-500">Avg Daily Demand</p>
+              <p className="text-2xl font-bold text-slate-900">{overview?.avg_daily_demand?.toLocaleString() ?? "-"}</p>
+            </div>
+            <div className="bg-white border rounded-xl p-4">
+              <p className="text-xs text-slate-500">Last Data Date</p>
+              <p className="text-2xl font-bold text-slate-900">{overview?.last_data_date ?? "-"}</p>
+            </div>
+          </div>
+        </Section>
+
+        <Section title="🔥 Hotspots / Alerts" badge="Sản phẩm loại A có biến động bất thường">
+          <div className="overflow-auto max-h-72">
+            <table className="min-w-full text-sm">
+              <thead className="sticky top-0 bg-slate-50">
+                <tr>
+                  <th className="text-left p-2">SKU</th>
+                  <th className="text-left p-2">Product</th>
+                  <th className="text-left p-2">Class</th>
+                  <th className="text-left p-2">14d Mean</th>
+                  <th className="text-left p-2">90d Mean</th>
+                  <th className="text-left p-2">Spike Score</th>
+                  <th className="text-left p-2">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {alerts.map((r) => (
+                  <tr key={r.product_id} className="border-t">
+                    <td className="p-2">{r.product_id}</td>
+                    <td className="p-2">{r.product_name}</td>
+                    <td className="p-2">{r.abc_class}/{r.xyz_class}</td>
+                    <td className="p-2">{r.mean_14.toFixed(2)}</td>
+                    <td className="p-2">{r.mean_90.toFixed(2)}</td>
+                    <td className="p-2 font-semibold text-rose-600">{r.spike_score.toFixed(2)}</td>
+                    <td className="p-2">
+                      <button
+                        className="px-2 py-1 bg-indigo-600 text-white rounded"
+                        onClick={() => loadDeepDive(r.product_id, r.product_name)}
+                      >
+                        Deep Dive
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {alerts.length === 0 && (
+                  <tr className="border-t">
+                    <td className="p-3 text-slate-500" colSpan={7}>
+                      No alert rows yet. Use Layer 3 list below to pick a SKU for Deep Dive.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+
+        <Section title="🔍 Bulk Filter & Action" badge="🔗 Lọc theo ABC/XYZ">
+          <div className="flex flex-wrap gap-3 items-end">
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">ABC</label>
+              <select className="border rounded p-2" value={abcFilter} onChange={(e) => setAbcFilter(e.target.value)}>
+                <option value="ALL">ALL</option>
+                <option value="A">A</option>
+                <option value="B">B</option>
+                <option value="C">C</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">XYZ</label>
+              <select className="border rounded p-2" value={xyzFilter} onChange={(e) => setXyzFilter(e.target.value)}>
+                <option value="ALL">ALL</option>
+                <option value="X">X</option>
+                <option value="Y">Y</option>
+                <option value="Z">Z</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">Horizon Days</label>
+              <input
+                type="number"
+                value={horizonDays}
+                min={1}
+                max={60}
+                className="border rounded p-2 w-24"
+                onChange={(e) => setHorizonDays(Number(e.target.value))}
+              />
+            </div>
+          </div>
+          <p className="text-sm text-slate-600">Matched SKUs: <b>{bulkRows.length}</b></p>
+
+          <div className="overflow-auto max-h-80 border rounded-lg">
+            <table className="min-w-full text-sm">
+              <thead className="sticky top-0 bg-slate-50">
+                <tr>
+                  <th className="text-left p-2">SKU</th>
+                  <th className="text-left p-2">Product</th>
+                  <th className="text-left p-2">Class</th>
+                  <th className="text-left p-2">Revenue</th>
+                  <th className="text-left p-2">CV</th>
+                  <th className="text-left p-2">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bulkRows.slice(0, 50).map((r) => (
+                  <tr key={r.product_id} className="border-t">
+                    <td className="p-2">{r.product_id}</td>
+                    <td className="p-2">{r.product_name}</td>
+                    <td className="p-2">{r.abc_class}/{r.xyz_class}</td>
+                    <td className="p-2">{r.revenue.toLocaleString()}</td>
+                    <td className="p-2">{r.cv.toFixed(3)}</td>
+                    <td className="p-2">
+                      <button
+                        className="px-2 py-1 bg-indigo-600 text-white rounded"
+                        onClick={() => loadDeepDive(r.product_id, r.product_name)}
+                      >
+                        Deep Dive
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {bulkRows.length === 0 && (
+                  <tr className="border-t">
+                    <td className="p-3 text-slate-500" colSpan={6}>No SKU matches current filter.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+
+        <Section title="📈 Deep Dive Forecast" badge="Click SKU ở trên để xem dự báo chi tiết">
+          {selectedSku ? (
+            <>
+              <p className="text-sm text-slate-600 mb-4">{deepDiveTitle}</p>
+              <div style={{ width: "100%", height: 360 }}>
+                <ResponsiveContainer>
+                  <ComposedChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" />
+                    <YAxis />
+                    <Tooltip />
+                    <Area type="monotone" dataKey="upper" fill="#e2e8f0" stroke="none" fillOpacity={0.5} />
+                    <Area type="monotone" dataKey="lower" fill="#ffffff" stroke="none" fillOpacity={1} />
+                    <Line type="monotone" dataKey="predicted" stroke="#2563eb" strokeWidth={2.5} dot={false} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </>
+          ) : (
+            <div className="text-slate-500">Click a SKU from Layer 2 or Layer 3 to open deep-dive forecast.</div>
           )}
-
-          <div style={{ width: "100%", height: 400 }}>
-            {data.length > 0 && !loading && (
-              <ResponsiveContainer>
-                <ComposedChart
-                  data={data}
-                  margin={{ top: 10, right: 30, left: 0, bottom: 0 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" />
-                  <YAxis />
-                  <Tooltip />
-                  <Legend />
-                  <Area
-                    type="monotone"
-                    dataKey="upperBound"
-                    fill="#e2e8f0"
-                    stroke="none"
-                    fillOpacity={0.4}
-                  />
-                  <Area
-                    type="monotone"
-                    dataKey="lowerBound"
-                    fill="#ffffff"
-                    stroke="none"
-                    fillOpacity={1}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="predicted"
-                    stroke="#3b82f6"
-                    strokeWidth={3}
-                    dot={{ r: 4 }}
-                    activeDot={{ r: 8 }}
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
-            )}
-
-            {data.length === 0 && !loading && !error && (
-              <div className="h-full flex items-center justify-center text-gray-400">
-                No data loaded yet.
-              </div>
-            )}
-
-            {loading && (
-              <div className="h-full flex flex-col items-center justify-center text-blue-500">
-                <p className="text-xl font-semibold animate-pulse">
-                  Running Multi-Step Recursive Forecasting...
-                </p>
-                <p className="text-sm mt-2 text-gray-500">
-                  Processing Time Series Data in Backend
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
+        </Section>
       </div>
     </DashboardLayout>
   );

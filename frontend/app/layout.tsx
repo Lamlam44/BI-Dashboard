@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import RefreshProvider from './components/RefreshProvider';
 
 export const metadata: Metadata = {
   title: 'BI Dashboard',
@@ -13,7 +14,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        <RefreshProvider>{children}</RefreshProvider>
+      </body>
     </html>
   );
 }

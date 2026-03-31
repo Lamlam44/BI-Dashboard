@@ -4,6 +4,7 @@ Provides endpoints for product demand forecasting.
 """
 
 import logging
+import threading
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -16,11 +17,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from data.data_loader import (
-    load_raw_data,
-    prepare_sales_data,
-    aggregate_daily_sales,
-    get_product_time_series,
-    fill_missing_dates
+    fill_missing_dates,
+    load_product_time_series_from_parquet,
+    load_products_summary_from_db,
+    ensure_parquet_cache,
+    load_overview_from_parquet,
+    load_alerts_from_parquet,
+    query_bulk_from_parquet,
+    DAILY_SNAPSHOT_FILE,
+    ABC_XYZ_FILE,
+    get_snapshot_row_count,
 )
 from data.feature_engineering import (
     create_all_features,
@@ -48,7 +54,10 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -56,15 +65,19 @@ app.add_middleware(
 
 # Global model and data storage
 model = None
-daily_sales = None
-available_products = None
+init_error = None
+init_started = False
+_init_lock = threading.Lock()
+_cache_build_lock = threading.Lock()
+_cache_building = False
+_recalculate_running = False
 
 
 # Pydantic models for API responses
 class ForecastPoint(BaseModel):
     """Single forecast data point."""
     date: str
-    actual: float
+    actual: Optional[float]
     predicted: float
     upper_bound: float
     lower_bound: float
@@ -93,41 +106,91 @@ class TrainingResponse(BaseModel):
     message: str
 
 
-# Startup event
+def initialize_forecasting_assets(force_reload: bool = False):
+    global model, init_error, init_started
+
+    with _init_lock:
+        if model is not None and not force_reload:
+            return
+
+        if not force_reload and init_started and init_error is None and model is not None:
+            return
+
+        init_started = True
+        init_error = None
+
+        try:
+            logger.info("Starting up - Loading forecast model...")
+
+            model_path = Path(__file__).parent.parent / "saved_models" / "global_demand_model.pkl"
+            try:
+                model = DemandForecastingModel.load(str(model_path))
+                logger.info(f"✅ Global Model loaded successfully from {model_path}.")
+            except Exception as model_error:
+                model = DemandForecastingModel()
+                logger.warning(
+                    f"⚠️ Could not load Global Model from {model_path}, it will run in On-Demand mode: {model_error}"
+                )
+
+            # Build parquet snapshots in background-friendly path to avoid heavy raw loads at runtime.
+            ensure_parquet_cache(force_refresh=force_reload)
+        except Exception as e:
+            init_error = str(e)
+            logger.error(f"Error during startup: {e}")
+
+
+def _start_background_initialization():
+    worker = threading.Thread(target=initialize_forecasting_assets, daemon=True)
+    worker.start()
+
+
+def _start_background_cache_build():
+    global _cache_building
+
+    if DAILY_SNAPSHOT_FILE.exists() and ABC_XYZ_FILE.exists() and get_snapshot_row_count() > 0:
+        return
+
+    with _cache_build_lock:
+        if _cache_building:
+            return
+        _cache_building = True
+
+    def _worker():
+        global _cache_building
+        try:
+            ensure_parquet_cache(force_refresh=False)
+        except Exception as e:
+            logger.error(f"Background parquet cache build failed: {e}")
+        finally:
+            with _cache_build_lock:
+                _cache_building = False
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def ensure_cache_ready():
+    if DAILY_SNAPSHOT_FILE.exists() and ABC_XYZ_FILE.exists() and get_snapshot_row_count() > 0:
+        return
+
+    _start_background_cache_build()
+    raise HTTPException(
+        status_code=503,
+        detail="Parquet cache is initializing. Please retry in a moment.",
+    )
+
+
 @app.on_event("startup")
 async def startup_event():
-    """Initialize data on application startup."""
-    global daily_sales, available_products, model
-    try:
-        logger.info("Starting up - Loading data...")
-        
-        # Load raw data
-        fact_sales, dim_product, dim_date = load_raw_data()
-        
-        # Prepare sales data
-        sales_data = prepare_sales_data(fact_sales, dim_product, dim_date)
-        
-        # Aggregate to daily level
-        daily_sales = aggregate_daily_sales(sales_data)
-        
-        # Get list of available products
-        available_products = daily_sales["ProductKey"].unique().tolist()
-        
-        logger.info(f"Data loaded successfully!")
-        logger.info(f"Available products: {len(available_products)}")
+    """Delay heavy forecasting initialization until first readiness/data request."""
+    logger.info("Forecast startup deferred; initialization will run lazily.")
 
-        # Try to load pre-trained global model
-        model_path = Path(__file__).parent.parent / "saved_models" / "global_demand_model.pkl"
-        try:
-            model = DemandForecastingModel.load(str(model_path))
-            logger.info(f"✅ Global Model loaded successfully from {model_path}.")
-        except Exception as e:
-            model = DemandForecastingModel()
-            logger.warning(f"⚠️ Could not load Global Model from {model_path}, it will run in On-Demand mode: {e}")
-            
-    except Exception as e:
-        logger.error(f"Error during startup: {e}")
-        raise
+
+def ensure_initialized():
+    if model is None:
+        initialize_forecasting_assets()
+
+    if init_error:
+        raise HTTPException(status_code=500, detail=f"Initialization failed: {init_error}")
 
 
 # API Endpoints
@@ -136,8 +199,31 @@ async def health_check():
     """Health check endpoint."""
     return {
         "status": "healthy",
-        "model_trained": model.is_trained,
-        "data_loaded": daily_sales is not None
+        "model_trained": bool(model and model.is_trained),
+        "data_loaded": True,
+        "initializing": model is None,
+        "init_error": init_error,
+    }
+
+
+@app.get("/ready")
+async def readiness_check():
+    """Readiness endpoint for frontend polling before expensive forecast calls."""
+    if model is None and not init_started:
+        _start_background_initialization()
+
+    cache_ready = DAILY_SNAPSHOT_FILE.exists() and ABC_XYZ_FILE.exists() and get_snapshot_row_count() > 0
+
+    return {
+        "ready": cache_ready,
+        "data_loaded": True,
+        "model_loaded": model is not None,
+        "cache_ready": cache_ready,
+        "cache_rows": get_snapshot_row_count(),
+        "cache_building": _cache_building,
+        "recalculate_running": _recalculate_running,
+        "initializing": model is None,
+        "init_error": init_error,
     }
 
 
@@ -153,22 +239,18 @@ async def list_products(limit: int = Query(10, ge=1, le=100)):
         List of product information
     """
     try:
-        if daily_sales is None:
-            raise HTTPException(status_code=503, detail="Data not loaded")
-        
-        products = daily_sales.groupby("ProductKey").agg({
-            "ProductName": "first",
-            "SalesQuantity": ["sum", "mean", "max"]
-        }).head(limit)
-        
+        ensure_initialized()
+
+        products = load_products_summary_from_db(limit=limit)
+
         result = []
-        for idx, row in products.iterrows():
+        for _, row in products.iterrows():
             result.append({
-                "product_id": int(idx),
-                "product_name": row[("ProductName", "first")],
-                "total_quantity": float(row[("SalesQuantity", "sum")]),
-                "avg_daily_quantity": float(row[("SalesQuantity", "mean")]),
-                "max_daily_quantity": float(row[("SalesQuantity", "max")])
+                "product_id": int(row["ProductKey"]),
+                "product_name": row["ProductName"],
+                "total_quantity": float(row["total_quantity"]),
+                "avg_daily_quantity": float(row["avg_daily_quantity"]),
+                "max_daily_quantity": float(row["max_daily_quantity"])
             })
         
         return {"products": result}
@@ -180,32 +262,99 @@ async def list_products(limit: int = Query(10, ge=1, le=100)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/overview")
+async def forecast_overview(horizon_days: int = Query(14, ge=1, le=60)):
+    try:
+        ensure_cache_ready()
+        return load_overview_from_parquet(horizon_days=horizon_days)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error loading overview: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/alerts")
+async def forecast_alerts(
+    limit: int = Query(20, ge=1, le=200),
+    abc_class: str = Query("A", pattern="^[ABC]$"),
+):
+    try:
+        ensure_cache_ready()
+        return {"alerts": load_alerts_from_parquet(limit=limit, abc_class=abc_class)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error loading alerts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/bulk/query")
+async def forecast_bulk_query(
+    abc_class: Optional[str] = Query(None, pattern="^[ABC]$"),
+    xyz_class: Optional[str] = Query(None, pattern="^[XYZ]$"),
+    category_key: Optional[int] = Query(None, ge=0),
+    limit: int = Query(200, ge=1, le=5000),
+):
+    try:
+        ensure_cache_ready()
+        rows = query_bulk_from_parquet(
+            abc_class=abc_class,
+            xyz_class=xyz_class,
+            category_key=category_key,
+            limit=limit,
+        )
+        return {"count": len(rows), "items": rows}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in bulk query: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/recalculate")
+async def recalculate_cache():
+    global _recalculate_running
+
+    try:
+        ensure_initialized()
+
+        if _recalculate_running:
+            return {"status": "running", "message": "Recalculate is already in progress"}
+
+        def _recalculate_worker():
+            global _recalculate_running
+            try:
+                ensure_parquet_cache(force_refresh=True)
+            except Exception as e:
+                logger.error(f"Background recalculate failed: {e}")
+            finally:
+                _recalculate_running = False
+
+        _recalculate_running = True
+        threading.Thread(target=_recalculate_worker, daemon=True).start()
+        return {"status": "accepted", "message": "Recalculate started in background"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error recalculating cache: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/refresh-ai-data")
 async def refresh_ai_data():
-    """Refreshes the in-memory data and Retrains the global model from the latest CSV"""
-    global daily_sales, available_products, model
+    """Refresh in-memory data and retrain global model from MySQL warehouse."""
+    global model
     try:
         logger.info("Triggering data refresh and AI retraining...")
         
+        ensure_initialized()
+
         # This will reload files, train, and save to .pkl overwriting the old one
         train_global_model()
         
-        # After successful train and save, we must update our in-memory global vars
-        # Load raw data
-        fact_sales, dim_product, dim_date = load_raw_data()
-        
-        # Prepare sales data
-        sales_data = prepare_sales_data(fact_sales, dim_product, dim_date)
-        
-        # Aggregate to daily level
-        daily_sales = aggregate_daily_sales(sales_data)
-        
-        # Get list of available products
-        available_products = daily_sales["ProductKey"].unique().tolist()
-        
-        # Reload model
-        model_path = Path(__file__).parent.parent / "saved_models" / "global_demand_model.pkl"
-        model = DemandForecastingModel.load(str(model_path))
+        # Reload latest model artifact after retrain.
+        initialize_forecasting_assets(force_reload=True)
         
         return {"status": "success", "message": "Tiến trình đồng bộ và Train lại Mô hình AI thành công. Đã ghi đè file .pkl."}
     
@@ -226,17 +375,22 @@ async def train_model(product_id: int):
         Training results and metrics
     """
     try:
-        if daily_sales is None:
-            raise HTTPException(status_code=503, detail="Data not loaded")
+        ensure_initialized()
         
         logger.info(f"Training request for product {product_id}")
         
-        # Get product time series
-        product_ts = get_product_time_series(daily_sales, product_id)
-        if product_ts is None:
+        # Get product time series (on-demand from DB to avoid full RAM preload).
+        product_ts = load_product_time_series_from_parquet(product_id)
+        if product_ts.empty:
             raise HTTPException(
                 status_code=404,
                 detail=f"Product {product_id} not found or insufficient data"
+            )
+
+        if len(product_ts) < 30:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Product {product_id} has insufficient data (minimum: 30 observations)"
             )
         
         # Fill missing dates
@@ -281,8 +435,7 @@ async def forecast(product_id: int, days_ahead: int = Query(7, ge=1, le=30)):
         Forecast with actual, predicted, upper and lower bounds
     """
     try:
-        if daily_sales is None:
-            raise HTTPException(status_code=503, detail="Data not loaded")
+        ensure_initialized()
         
         if not model.is_trained:
             raise HTTPException(
@@ -292,9 +445,8 @@ async def forecast(product_id: int, days_ahead: int = Query(7, ge=1, le=30)):
         
         logger.info(f"Forecast request for product {product_id}, {days_ahead} days")
         
-        # Get product time series
-        product_ts = get_product_time_series(daily_sales, product_id)
-        if product_ts is None:
+        product_ts = load_product_time_series_from_parquet(product_id)
+        if product_ts.empty:
             raise HTTPException(
                 status_code=404,
                 detail=f"Product {product_id} not found"
@@ -306,30 +458,23 @@ async def forecast(product_id: int, days_ahead: int = Query(7, ge=1, le=30)):
         # Create features
         features_df = create_all_features(product_ts)
         
-        # Get feature columns
-        feature_cols = get_feature_columns(features_df)
-        
-        # Make predictions with bounds
-        predictions, upper_bounds, lower_bounds = model.predict_with_bounds(
-            features_df
-        )
-        
-        # Build forecast response
+        # Generate true future horizon using recursive forecasting.
+        forecast_df = model.predict_future(features_df, n_steps=days_ahead)
+
         forecast_points = []
-        for idx, row in features_df.iterrows():
+        for _, row in forecast_df.iterrows():
             forecast_points.append(ForecastPoint(
-                date=row["DateKey"].strftime("%Y-%m-%d"),
-                actual=float(row["SalesQuantity"]),
-                predicted=float(predictions[idx]),
-                upper_bound=float(upper_bounds[idx]),
-                lower_bound=float(lower_bounds[idx])
+                date=pd.to_datetime(row["DateKey"]).strftime("%Y-%m-%d"),
+                actual=None,
+                predicted=float(row["predicted"]),
+                upper_bound=float(row["upper_bound"]),
+                lower_bound=float(row["lower_bound"])
             ))
-        
-        # Return last days_ahead points
+
         return ForecastResponse(
             product_id=product_id,
             product_name=product_ts["ProductName"].iloc[0],
-            forecast_points=forecast_points[-days_ahead:]
+            forecast_points=forecast_points
         )
     
     except HTTPException:
@@ -355,8 +500,7 @@ async def forecast_latest(
         Latest forecast points with metadata
     """
     try:
-        if daily_sales is None:
-            raise HTTPException(status_code=503, detail="Data not loaded")
+        ensure_initialized()
         
         if not model.is_trained:
             raise HTTPException(
@@ -364,9 +508,8 @@ async def forecast_latest(
                 detail=f"Model not trained. Call /train/{product_id} first"
             )
         
-        # Get product time series
-        product_ts = get_product_time_series(daily_sales, product_id)
-        if product_ts is None:
+        product_ts = load_product_time_series_from_parquet(product_id)
+        if product_ts.empty:
             raise HTTPException(
                 status_code=404,
                 detail=f"Product {product_id} not found"
@@ -381,8 +524,8 @@ async def forecast_latest(
         # Get feature columns
         feature_cols = get_feature_columns(features_df)
         
-        # Make predictions
-        predictions, upper_bounds, lower_bounds = model.predict_with_bounds(
+        # Make in-sample predictions for accuracy inspection view.
+        predictions, lower_bounds, upper_bounds = model.predict_with_bounds(
             features_df
         )
         
