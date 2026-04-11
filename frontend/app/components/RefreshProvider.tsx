@@ -36,8 +36,10 @@ interface RefreshContextValue {
   setIntervalMinutes: (m: IntervalOption) => void;
   /** Latest real-time summary from SSE (null until first push) */
   realtimeSummary: RealtimeSummary | null;
-  /** Force an immediate refresh (bumps tick) */
+  /** Force an immediate refresh: triggers backend ETL then bumps tick */
   forceRefresh: () => void;
+  /** True while ETL is running after a manual refresh */
+  isRefreshing: boolean;
 }
 
 const RefreshContext = createContext<RefreshContextValue>({
@@ -46,6 +48,7 @@ const RefreshContext = createContext<RefreshContextValue>({
   setIntervalMinutes: () => {},
   realtimeSummary: null,
   forceRefresh: () => {},
+  isRefreshing: false,
 });
 
 export const useRefresh = () => useContext(RefreshContext);
@@ -63,6 +66,7 @@ export default function RefreshProvider({ children }: { children: React.ReactNod
   const [intervalMinutes, setIntervalMinutesState] = useState<IntervalOption>(30);
   const [refreshTick, setRefreshTick] = useState(0);
   const [realtimeSummary, setRealtimeSummary] = useState<RealtimeSummary | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Load saved interval from localStorage on mount
@@ -76,7 +80,14 @@ export default function RefreshProvider({ children }: { children: React.ReactNod
   }, []);
 
   const forceRefresh = useCallback(() => {
-    setRefreshTick((t) => t + 1);
+    setIsRefreshing(true);
+    // Trigger backend ETL pipeline (fire-and-forget, no auth required)
+    fetch(`${API_BASE_URL}/data/etl/run`, { method: 'POST' }).catch(() => {});
+    // Bump refreshTick after 2s to let ETL start processing
+    setTimeout(() => {
+      setRefreshTick((t) => t + 1);
+      setIsRefreshing(false);
+    }, 2000);
   }, []);
 
   // Scheduled auto-refresh timer
@@ -111,7 +122,7 @@ export default function RefreshProvider({ children }: { children: React.ReactNod
 
   return (
     <RefreshContext.Provider
-      value={{ refreshTick, intervalMinutes, setIntervalMinutes, realtimeSummary, forceRefresh }}
+      value={{ refreshTick, intervalMinutes, setIntervalMinutes, realtimeSummary, forceRefresh, isRefreshing }}
     >
       {children}
     </RefreshContext.Provider>

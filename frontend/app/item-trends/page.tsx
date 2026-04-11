@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import ExportPDFButton from '../components/ExportPDFButton';
 import DashboardLayout from '../components/DashboardLayout';
 import Section from '../components/Section';
 import { useAuth } from '../store/useAuth';
@@ -28,6 +29,7 @@ const ItemTrends = () => {
     }
   }, [user, router]);
 
+  const reportRef = useRef<HTMLDivElement>(null);
   const [tempYear, setTempYear] = useState<string>('ALL');
   const [appliedYear, setAppliedYear] = useState<string>('ALL');
 
@@ -49,14 +51,22 @@ const ItemTrends = () => {
 
   return (
     <DashboardLayout>
-      <div className="space-y-8">
+      <div className="space-y-8" ref={reportRef}>
 
         {/* HEADER */}
-        <div>
-          <h1 className="text-3xl font-bold text-slate-900">Item Trends</h1>
-          <p className="text-slate-600 mt-2">
-            Analyze product performance and market trends
-          </p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-slate-900">Xu Hướng Sản Phẩm</h1>
+            <p className="text-slate-600 mt-2">
+              Phân tích hiệu suất sản phẩm và xu hướng thị trường
+            </p>
+          </div>
+          <ExportPDFButton
+            contentRef={reportRef}
+            filename="item-trends"
+            reportTitle="Báo cáo Xu Hướng Sản Phẩm"
+            filterInfo={appliedYear === 'ALL' ? 'Toàn thời gian' : `Năm ${appliedYear}`}
+          />
         </div>
 
         {/* FILTER + YEAR ANALYSIS — hidden for store_manager */}
@@ -64,15 +74,14 @@ const ItemTrends = () => {
         <Section title="📅 Phân tích theo Năm" badge="🔗 Lọc theo năm đã chọn">
           <div className="flex flex-wrap items-center gap-3">
             <select className="border p-2 rounded" value={tempYear} onChange={(e) => setTempYear(e.target.value)}>
-              <option value="ALL">All Years</option>
+              <option value="ALL">Tất cả Năm</option>
               {availableYears.map((year) => (
                 <option key={year} value={year}>Năm {year}</option>
               ))}
             </select>
-            <button onClick={handleApplyFilter} className="bg-blue-600 text-white px-4 py-2 rounded">Apply</button>
+            <button onClick={handleApplyFilter} className="bg-blue-600 text-white px-4 py-2 rounded">Áp dụng</button>
           </div>
           <StatsCards selectedYear={appliedYear} />
-          <CustomerChart selectedYear={appliedYear} />
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <TrendingProductsChart selectedYear={appliedYear} />
             <PromotionImpactChart selectedYear={appliedYear} />
@@ -86,6 +95,7 @@ const ItemTrends = () => {
           title={isStoreManager ? '📦 Quản lý Tồn kho Cửa hàng' : '📊 Phân tích Tổng hợp'}
           badge={isStoreManager ? 'Safety Stock & Stockout' : '⚠ Toàn thời gian — Không áp dụng bộ lọc năm'}
         >
+          {!isStoreManager && <CustomerChart selectedYear="ALL" />}
           {!isStoreManager && <RfmSegmentsChart />}
           {!isStoreManager && <ProductPerformanceChart />}
           <InventoryMetricsChart />

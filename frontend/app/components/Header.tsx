@@ -13,7 +13,7 @@ const INTERVAL_OPTIONS: { value: IntervalOption; label: string }[] = [
 ];
 
 const Header = () => {
-  const { intervalMinutes, setIntervalMinutes, forceRefresh } = useRefresh();
+  const { intervalMinutes, setIntervalMinutes, forceRefresh, isRefreshing } = useRefresh();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -32,7 +32,7 @@ const Header = () => {
     <header className="fixed top-0 right-0 left-64 bg-white border-b border-slate-200 z-40">
       <div className="h-20 px-8 flex items-center justify-between gap-6">
         <div className="flex items-center gap-4">
-          <h1 className="text-xl font-semibold text-slate-800 tracking-tight">BI Dashboard Intelligence System</h1>
+          <h1 className="text-xl font-semibold text-slate-800 tracking-tight">Hệ Thống BI Dashboard Thông Minh</h1>
           <span className="px-3 py-1 bg-indigo-50 text-indigo-700 text-xs font-medium rounded-full border border-indigo-100">Enterprise Edition</span>
         </div>
 
@@ -45,10 +45,11 @@ const Header = () => {
           {/* Manual refresh button */}
           <button
             onClick={forceRefresh}
-            title="Làm mới dữ liệu ngay"
-            className="p-2 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+            disabled={isRefreshing}
+            title={isRefreshing ? 'Đang chạy ETL Pipeline...' : 'Làm mới dữ liệu ngay (ETL + Refresh)'}
+            className="p-2 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-blue-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <RefreshCw size={18} />
+            <RefreshCw size={18} className={isRefreshing ? 'animate-spin text-blue-500' : ''} />
           </button>
 
           {/* Refresh interval selector */}

@@ -1,0 +1,120 @@
+{
+    "FactSales": {
+        "display_name": "Doanh Số Bán Hàng (FactSales)",
+        "type": "Fact",
+        "deletion_strategy": "DATE_RANGE",
+        "primary_keys": [
+            "SalesKey"
+        ],
+        "columns": [
+            {
+                "name": "SalesKey",
+                "type": "int",
+                "description": "Khóa tự sinh"
+            },
+            {
+                "name": "DateKey",
+                "type": "datetime",
+                "description": "Ngày bán"
+            },
+            {
+                "name": "channelKey",
+                "type": "int",
+                "description": "Kênh bán"
+            },
+            {
+                "name": "StoreKey",
+                "type": "int",
+                "description": "Cửa hàng"
+            },
+            {
+                "name": "ProductKey",
+                "type": "int",
+                "description": "Sản phẩm"
+            },
+            {
+                "name": "PromotionKey",
+                "type": "int",
+                "description": "Khuyến mãi"
+            },
+            {
+                "name": "CurrencyKey",
+                "type": "int",
+                "description": "Loại tiền"
+            },
+            {
+                "name": "UnitCost",
+                "type": "float",
+                "description": "Giá vốn"
+            },
+            {
+                "name": "UnitPrice",
+                "type": "float",
+                "description": "Giá bán"
+            },
+            {
+                "name": "SalesQuantity",
+                "type": "int",
+                "description": "Số lượng"
+            },
+            {
+                "name": "ReturnQuantity",
+                "type": "int",
+                "description": "Số lượng trả"
+            },
+            {
+                "name": "ReturnAmount",
+                "type": "float",
+                "description": "Tổng tiền trả"
+            },
+            {
+                "name": "DiscountQuantity",
+                "type": "int",
+                "description": "Số lượng giảm"
+            },
+            {
+                "name": "DiscountAmount",
+                "type": "float",
+                "description": "Tổng tiền giảm"
+            },
+            {
+                "name": "SalesAmount",
+                "type": "float",
+                "description": "Tổng doanh số"
+            },
+            {
+                "name": "TotalCost",
+                "type": "float",
+                "description": "Tổng chi phí"
+            }
+        ]
+    },
+    "FactOnlineSales": {
+        "display_name": "Doanh Số Online (FactOnlineSales)",
+        "type": "Fact",
+        "deletion_strategy": "DATE_RANGE",
+        "primary_keys": [
+            "OnlineSalesKey"
+        ],
+        "columns": [
+            {"name": "OnlineSalesKey", "type": "bigint", "description": "Khóa tự sinh"},
+            {"name": "DateKey", "type": "text", "description": "Ngày bán"},
+            {"name": "StoreKey", "type": "bigint", "description": "Cửa hàng"},
+            {"name": "ProductKey", "type": "bigint", "description": "Sản phẩm"},
+            {"name": "PromotionKey", "type": "bigint", "description": "Khuyến mãi"},
+            {"name": "CurrencyKey", "type": "bigint", "description": "Loại tiền"},
+            {"name": "CustomerKey", "type": "bigint", "description": "Khách hàng"},
+            {"name": "SalesOrderNumber", "type": "text", "description": "Số đơn hàng"},
+            {"name": "SalesOrderLineNumber", "type": "bigint", "description": "Dòng đơn hàng"},
+            {"name": "SalesQuantity", "type": "bigint", "description": "Số lượng"},
+            {"name": "SalesAmount", "type": "float", "description": "Tổng doanh số"},
+            {"name": "ReturnQuantity", "type": "bigint", "description": "Số lượng trả"},
+            {"name": "ReturnAmount", "type": "float", "description": "Tổng tiền trả"},
+            {"name": "DiscountQuantity", "type": "bigint", "description": "Số lượng giảm"},
+            {"name": "DiscountAmount", "type": "float", "description": "Tổng tiền giảm"},
+            {"name": "TotalCost", "type": "float", "description": "Tổng chi phí"},
+            {"name": "UnitCost", "type": "float", "description": "Giá vốn"},
+            {"name": "UnitPrice", "type": "float", "description": "Giá bán"}
+        ]
+    }
+}

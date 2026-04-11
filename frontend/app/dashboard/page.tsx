@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import ExportPDFButton from '../components/ExportPDFButton';
 import DashboardLayout from '../components/DashboardLayout';
 import Section from '../components/Section';
 import { useRefresh } from '../components/RefreshProvider';
@@ -108,6 +109,8 @@ export default function Dashboard() {
   }, [dr]);
 
   /* drill-down state */
+  const reportRef = useRef<HTMLDivElement>(null);
+
   const [drillYear, setDrillYear] = useState<string | null>(null);
   /* rolling average toggle */
   const [showMA, setShowMA] = useState(false);
@@ -177,12 +180,34 @@ export default function Dashboard() {
   const ok = !loading && !error && data && data.status !== 'empty';
 
   /* ── RENDER ── */
+  const filterLabel = preset === 'all' ? 'Toàn thời gian'
+    : preset === 'custom' ? `${cStart || '?'} → ${cEnd || '?'}`
+    : PRESETS.find(p => p.key === preset)?.label || preset;
+
   return (
     <DashboardLayout>
-      <div className="space-y-5">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">Sales & Profit Dashboard</h1>
-          <p className="text-slate-500 text-sm">Tổng quan doanh thu, lợi nhuận và phân tích kinh doanh</p>
+      <div className="space-y-5" ref={reportRef}>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">Bảng Điều Khiển Doanh Thu & Lợi Nhuận</h1>
+            <p className="text-slate-500 text-sm">Tổng quan doanh thu, lợi nhuận và phân tích kinh doanh</p>
+          </div>
+          <ExportPDFButton
+            generateBlob={async () => {
+              const { generateSalesPDFBlob } = await import('../components/pdf/SalesProfitPDFDoc');
+              return generateSalesPDFBlob({
+                data: data!,
+                chData,
+                trendRows,
+                pieRows,
+                filterLabel,
+                username: user?.display_name || user?.username,
+                role,
+              });
+            }}
+            filename="sales-profit-dashboard"
+            disabled={!ok}
+          />
         </div>
 
         {/* ═══ TIME FILTER ═══ */}

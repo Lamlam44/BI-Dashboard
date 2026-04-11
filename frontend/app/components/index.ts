@@ -4,3 +4,4 @@ export { default as Header } from './Header';
 export { default as RefreshProvider, useRefresh } from './RefreshProvider';
 export { default as AuthControl } from './AuthControl';
 export { default as Section } from './Section';
+export { default as ExportPDFButton } from './ExportPDFButton';

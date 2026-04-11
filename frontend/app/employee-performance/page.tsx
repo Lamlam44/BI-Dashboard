@@ -1,6 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import ExportPDFButton from '../components/ExportPDFButton';
+import { useAuth } from '../store/useAuth';
 
 import DashboardLayout from '../components/DashboardLayout';
 import Section from '../components/Section';
@@ -54,6 +56,7 @@ function buildQuery(params: Record<string, string>) {
 
 export default function EmployeePerformancePage() {
   const { refreshTick } = useRefresh();
+  const { user } = useAuth();
   const [filters, setFilters] = useState<EmployeeFiltersResponse | null>(null);
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [trend, setTrend] = useState<TrendResponse | null>(null);
@@ -64,6 +67,7 @@ export default function EmployeePerformancePage() {
   const [selectedMonth, setSelectedMonth] = useState('');
   const [selectedEmployeeKey, setSelectedEmployeeKey] = useState('');
 
+  const reportRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -161,17 +165,34 @@ export default function EmployeePerformancePage() {
     };
   }, [filters, sharedQuery, refreshTick]);
 
+  const filterLabel = [selectedYear && `Năm ${selectedYear}`, selectedMonth && `Tháng ${selectedMonth}`].filter(Boolean).join(' | ') || 'Toàn bộ';
+
   return (
     <DashboardLayout>
-      <div className="space-y-6">
-        <header>
-          <h1 className="text-3xl font-bold text-slate-900">Employee Performance</h1>
-          <p className="text-slate-600 mt-2">
-            Real-time performance analytics for store managers based on available warehouse attributes.
-          </p>
+      <div className="space-y-6" ref={reportRef}>
+        <header className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold text-slate-900">Hiệu Suất Nhân Viên</h1>
+            <p className="text-slate-600 mt-2">
+              Phân tích hiệu suất làm việc theo thời gian thực dựa trên dữ liệu từ kho dữ liệu.
+            </p>
+          </div>
+          <ExportPDFButton
+            generateBlob={async () => {
+              const { generateEmployeePDFBlob } = await import('../components/pdf/EmployeePDFDoc');
+              return generateEmployeePDFBlob({
+                dashboard,
+                leaderboard,
+                trend,
+                filterLabel,
+                username: user?.display_name || user?.username,
+              });
+            }}
+            filename="employee-performance"
+          />
         </header>
 
-        <Section title="🎛 Bộ lọc Nhân viên" badge="Chọn Year, Month, Manager để lọc dữ liệu bên dưới">
+        <Section title="🏛 Bộ lọc Nhân viên" badge="Chọn Năm, Tháng, Quản lý để lọc dữ liệu bên dưới">
           <FiltersBar
             years={filters?.years || []}
             months={filters?.months || []}
@@ -185,7 +206,7 @@ export default function EmployeePerformancePage() {
           />
         </Section>
 
-        {loading && <p className="text-sm text-slate-500">Loading employee performance data...</p>}
+        {loading && <p className="text-sm text-slate-500">Đang tải dữ liệu hiệu suất nhân viên...</p>}
         {error && <p className="text-sm text-red-600">{error}</p>}
 
         {!loading && !error && (

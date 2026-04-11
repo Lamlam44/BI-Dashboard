@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import ExportPDFButton from "../components/ExportPDFButton";
 import DashboardLayout from "../components/DashboardLayout";
 import Section from "../components/Section";
 import { useRefresh } from "../components/RefreshProvider";
@@ -85,20 +86,21 @@ export default function ForecastingClient() {
 
   const [abcFilter, setAbcFilter] = useState<string>("A");
   const [xyzFilter, setXyzFilter] = useState<string>("ALL");
+  const reportRef = useRef<HTMLDivElement>(null);
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [isRecalculating, setIsRecalculating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadOverview = async () => {
     const res = await fetchJsonWithTimeout(`${API_BASE}/overview?horizon_days=${horizonDays}`, 600000);
-    if (!res.ok) throw new Error("Failed to load overview");
+    if (!res.ok) throw new Error("Không thể tải tổng quan");
     const data = await res.json();
     setOverview(data);
   };
 
   const loadAlerts = async () => {
     const res = await fetchJsonWithTimeout(`${API_BASE}/alerts?limit=20&abc_class=A`, 600000);
-    if (!res.ok) throw new Error("Failed to load alerts");
+    if (!res.ok) throw new Error("Không thể tải cảnh báo");
     const data = await res.json();
     setAlerts(data.alerts || []);
   };
@@ -110,14 +112,14 @@ export default function ForecastingClient() {
     params.set("limit", "300");
 
     const res = await fetchJsonWithTimeout(`${API_BASE}/bulk/query?${params.toString()}`, 600000);
-    if (!res.ok) throw new Error("Failed to load bulk list");
+    if (!res.ok) throw new Error("Không thể tải danh sách SKU");
     const data = await res.json();
     setBulkRows(data.items || []);
   };
 
   const loadDeepDive = async (productId: number, productName: string) => {
     const res = await fetchJsonWithTimeout(`${API_BASE}/forecast/${productId}?days_ahead=${horizonDays}`, 600000);
-    if (!res.ok) throw new Error("Failed to load deep-dive forecast");
+    if (!res.ok) throw new Error("Không thể tải dự báo chi tiết");
     const payload = await res.json();
     setDeepDiveData(payload.forecast_points || []);
     setDeepDiveTitle(`${productName} (SKU ${productId})`);
@@ -131,12 +133,12 @@ export default function ForecastingClient() {
   const waitForRecalculateDone = async () => {
     for (let i = 0; i < 60; i++) {
       const readyRes = await fetchJsonWithTimeout(`${API_BASE}/ready`, 600000);
-      if (!readyRes.ok) throw new Error("Failed to check recalculation status");
+      if (!readyRes.ok) throw new Error("Không thể kiểm tra trạng thái tính toán lại");
       const readyData = (await readyRes.json()) as ReadyResponse;
       if (!readyData.recalculate_running) return;
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
-    throw new Error("Recalculate is taking too long. Please try again in a moment.");
+    throw new Error("Đang tính toán quá lâu. Vui lòng thử lại sau.");
   };
 
   const recalculate = async () => {
@@ -144,11 +146,11 @@ export default function ForecastingClient() {
     setError(null);
     try {
       const res = await fetchJsonWithTimeout(`${API_BASE}/recalculate`, 600000, { method: "POST" });
-      if (!res.ok) throw new Error("Recalculate failed");
+      if (!res.ok) throw new Error("Tính toán lại thất bại");
       await waitForRecalculateDone();
       await refreshAllLayers();
     } catch (e: any) {
-      setError(e.message || "Unknown error");
+      setError(e.message || "Lỗi không xác định");
     } finally {
       setIsRecalculating(false);
     }
@@ -158,7 +160,7 @@ export default function ForecastingClient() {
     setIsLoadingData(true);
     setError(null);
     refreshAllLayers()
-      .catch((e: any) => setError(e.message || "Unknown error"))
+      .catch((e: any) => setError(e.message || "Lỗi không xác định"))
       .finally(() => setIsLoadingData(false));
   }, [horizonDays, refreshTick]);
 
@@ -178,7 +180,7 @@ export default function ForecastingClient() {
   }, []);
 
   useEffect(() => {
-    loadBulk().catch((e: any) => setError(e.message || "Unknown error"));
+    loadBulk().catch((e: any) => setError(e.message || "Lỗi không xác định"));
   }, [abcFilter, xyzFilter, refreshTick]);
 
   const chartData = useMemo(
@@ -194,19 +196,37 @@ export default function ForecastingClient() {
 
   return (
     <DashboardLayout>
-      <div className="space-y-8">
+      <div className="space-y-8" ref={reportRef}>
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-slate-900">Demand Forecast Control Tower</h1>
-            <p className="text-slate-600 mt-2">Management by objectives and exceptions for 2,000+ SKUs</p>
+            <h1 className="text-3xl font-bold text-slate-900">Trung Tâm Điều Khiển Dự Báo Nhu Cầu</h1>
+            <p className="text-slate-600 mt-2">Quản lý theo mục tiêu và ngoại lệ cho hơn 2.000 SKU</p>
           </div>
-          <button
-            onClick={recalculate}
-            disabled={isLoadingData || isRecalculating}
-            className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-semibold hover:bg-emerald-700 disabled:bg-slate-400"
-          >
-            {isRecalculating ? "Recalculating..." : isLoadingData ? "Loading..." : "Recalculate All"}
-          </button>
+          <div className="flex items-center gap-2">
+            <ExportPDFButton
+              generateBlob={async () => {
+                const { generateForecastPDFBlob } = await import('../components/pdf/ForecastingPDFDoc');
+                return generateForecastPDFBlob({
+                  overview,
+                  alerts,
+                  bulkRows,
+                  abcFilter,
+                  xyzFilter,
+                  horizonDays,
+                  username: undefined,
+                });
+              }}
+              filename="demand-forecasting"
+              disabled={isLoadingData}
+            />
+            <button
+              onClick={recalculate}
+              disabled={isLoadingData || isRecalculating}
+              className="px-4 py-2 bg-emerald-600 text-white rounded-lg font-semibold hover:bg-emerald-700 disabled:bg-slate-400"
+            >
+              {isRecalculating ? "Đang tính toán lại..." : isLoadingData ? "Đang tải..." : "Tính toán lại tất cả"}
+            </button>
+          </div>
         </div>
 
         {error && <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-lg">{error}</div>}
@@ -214,36 +234,36 @@ export default function ForecastingClient() {
         <Section title="📊 Tổng quan Dự báo" badge="Horizon: ${horizonDays} ngày">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="bg-white border rounded-xl p-4">
-              <p className="text-xs text-slate-500">Forecast Total Demand ({horizonDays}d)</p>
+              <p className="text-xs text-slate-500">Tổng nhu cầu dự báo ({horizonDays} ngày)</p>
               <p className="text-2xl font-bold text-slate-900">{overview?.forecast_total_demand?.toLocaleString() ?? "-"}</p>
             </div>
             <div className="bg-white border rounded-xl p-4">
-              <p className="text-xs text-slate-500">SKU Count</p>
+              <p className="text-xs text-slate-500">Số lượng SKU</p>
               <p className="text-2xl font-bold text-slate-900">{overview?.sku_count?.toLocaleString() ?? "-"}</p>
             </div>
             <div className="bg-white border rounded-xl p-4">
-              <p className="text-xs text-slate-500">Avg Daily Demand</p>
+              <p className="text-xs text-slate-500">Nhu cầu trung bình/ngày</p>
               <p className="text-2xl font-bold text-slate-900">{overview?.avg_daily_demand?.toLocaleString() ?? "-"}</p>
             </div>
             <div className="bg-white border rounded-xl p-4">
-              <p className="text-xs text-slate-500">Last Data Date</p>
+              <p className="text-xs text-slate-500">Ngày dữ liệu cuối</p>
               <p className="text-2xl font-bold text-slate-900">{overview?.last_data_date ?? "-"}</p>
             </div>
           </div>
         </Section>
 
-        <Section title="🔥 Hotspots / Alerts" badge="Sản phẩm loại A có biến động bất thường">
+        <Section title="🔥 Cảnh báo dị thường" badge="Sản phẩm loại A có biến động bất thường">
           <div className="overflow-auto max-h-72">
             <table className="min-w-full text-sm">
               <thead className="sticky top-0 bg-slate-50">
                 <tr>
-                  <th className="text-left p-2">SKU</th>
-                  <th className="text-left p-2">Product</th>
-                  <th className="text-left p-2">Class</th>
-                  <th className="text-left p-2">14d Mean</th>
-                  <th className="text-left p-2">90d Mean</th>
-                  <th className="text-left p-2">Spike Score</th>
-                  <th className="text-left p-2">Action</th>
+                  <th className="text-left p-2">Mã SKU</th>
+                  <th className="text-left p-2">Sản phẩm</th>
+                  <th className="text-left p-2">Phân loại</th>
+                  <th className="text-left p-2">TB 14 ngày</th>
+                  <th className="text-left p-2">TB 90 ngày</th>
+                  <th className="text-left p-2">Độ đột biến</th>
+                  <th className="text-left p-2">Thao tác</th>
                 </tr>
               </thead>
               <tbody>
@@ -260,7 +280,7 @@ export default function ForecastingClient() {
                         className="px-2 py-1 bg-indigo-600 text-white rounded"
                         onClick={() => loadDeepDive(r.product_id, r.product_name)}
                       >
-                        Deep Dive
+                        Xem chi tiết
                       </button>
                     </td>
                   </tr>
@@ -268,7 +288,7 @@ export default function ForecastingClient() {
                 {alerts.length === 0 && (
                   <tr className="border-t">
                     <td className="p-3 text-slate-500" colSpan={7}>
-                      No alert rows yet. Use Layer 3 list below to pick a SKU for Deep Dive.
+                      Chưa có cảnh báo. Dùng danh sách bên dưới để chọn SKU xem chi tiết.
                     </td>
                   </tr>
                 )}
@@ -277,7 +297,7 @@ export default function ForecastingClient() {
           </div>
         </Section>
 
-        <Section title="🔍 Bulk Filter & Action" badge="🔗 Lọc theo ABC/XYZ">
+        <Section title="🔍 Lọc & Thao tác hàng loạt" badge="🔗 Lọc theo ABC/XYZ">
           <div className="flex flex-wrap gap-3 items-end">
             <div>
               <label className="block text-xs text-slate-500 mb-1">ABC</label>
@@ -298,7 +318,7 @@ export default function ForecastingClient() {
               </select>
             </div>
             <div>
-              <label className="block text-xs text-slate-500 mb-1">Horizon Days</label>
+              <label className="block text-xs text-slate-500 mb-1">Số ngày dự báo</label>
               <input
                 type="number"
                 value={horizonDays}
@@ -309,18 +329,18 @@ export default function ForecastingClient() {
               />
             </div>
           </div>
-          <p className="text-sm text-slate-600">Matched SKUs: <b>{bulkRows.length}</b></p>
+          <p className="text-sm text-slate-600">Số SKU khớp: <b>{bulkRows.length}</b></p>
 
           <div className="overflow-auto max-h-80 border rounded-lg">
             <table className="min-w-full text-sm">
               <thead className="sticky top-0 bg-slate-50">
                 <tr>
-                  <th className="text-left p-2">SKU</th>
-                  <th className="text-left p-2">Product</th>
-                  <th className="text-left p-2">Class</th>
-                  <th className="text-left p-2">Revenue</th>
-                  <th className="text-left p-2">CV</th>
-                  <th className="text-left p-2">Action</th>
+                  <th className="text-left p-2">Mã SKU</th>
+                  <th className="text-left p-2">Sản phẩm</th>
+                  <th className="text-left p-2">Phân loại</th>
+                  <th className="text-left p-2">Doanh thu</th>
+                  <th className="text-left p-2">Hệ số CV</th>
+                  <th className="text-left p-2">Thao tác</th>
                 </tr>
               </thead>
               <tbody>
@@ -336,14 +356,14 @@ export default function ForecastingClient() {
                         className="px-2 py-1 bg-indigo-600 text-white rounded"
                         onClick={() => loadDeepDive(r.product_id, r.product_name)}
                       >
-                        Deep Dive
+                        Xem chi tiết
                       </button>
                     </td>
                   </tr>
                 ))}
                 {bulkRows.length === 0 && (
                   <tr className="border-t">
-                    <td className="p-3 text-slate-500" colSpan={6}>No SKU matches current filter.</td>
+                    <td className="p-3 text-slate-500" colSpan={6}>Không có SKU phù hợp với bộ lọc hiện tại.</td>
                   </tr>
                 )}
               </tbody>
@@ -351,7 +371,7 @@ export default function ForecastingClient() {
           </div>
         </Section>
 
-        <Section title="📈 Deep Dive Forecast" badge="Click SKU ở trên để xem dự báo chi tiết">
+        <Section title="📈 Dự báo Chi tiết" badge="Chọn SKU ở trên để xem dự báo chi tiết">
           {selectedSku ? (
             <>
               <p className="text-sm text-slate-600 mb-4">{deepDiveTitle}</p>
@@ -370,7 +390,7 @@ export default function ForecastingClient() {
               </div>
             </>
           ) : (
-            <div className="text-slate-500">Click a SKU from Layer 2 or Layer 3 to open deep-dive forecast.</div>
+            <div className="text-slate-500">Chọn một SKU từ danh sách bên trên để xem dự báo chi tiết.</div>
           )}
         </Section>
       </div>

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import DashboardLayout from '../components/DashboardLayout';
 import {
   Upload, Database, RefreshCw, Activity, Server,
-  Table2, Link2, FileSpreadsheet, Play, CheckCircle2,
+  Table2, FileSpreadsheet, CheckCircle2,
   XCircle, Clock, ChevronDown, ChevronUp, AlertTriangle,
   Trash2, AlertCircle, Download, Eye,
 } from 'lucide-react';
@@ -66,9 +66,9 @@ interface CsvPreview {
 // Helpers
 // ═══════════════════════════════════════════════════════════════
 
-const fmtNum = (n: number) => new Intl.NumberFormat('en-US').format(n);
+const fmtNum = (n: number) => new Intl.NumberFormat('vi-VN').format(n);
 
-type TabKey = 'overview' | 'etl' | 'csv' | 'schema';
+type TabKey = 'overview' | 'csv' | 'schema';
 
 const StatusBadge = ({ status }: { status: string }) => {
   const colors: Record<string, string> = {
@@ -108,9 +108,9 @@ function DataManagementContent() {
   // Data Sources
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
 
-  // ETL Status
-  const [etlStatus, setEtlStatus] = useState<EtlStatus | null>(null);
-  const [etlPolling, setEtlPolling] = useState(false);
+  // ETL Status (auto-triggered after CSV/Purge)
+  const [etlRunning, setEtlRunning] = useState(false);
+  const [etlMessage, setEtlMessage] = useState<string | null>(null);
 
   // CSV Upload
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -149,17 +149,39 @@ function DataManagementContent() {
       .catch(() => {});
   }, []);
 
-  const loadEtlStatus = useCallback(() => {
-    axios.get(`${DM_API}/etl/status`)
-      .then(res => setEtlStatus(res.data))
-      .catch(() => {});
-  }, []);
+  const runEtlSilently = useCallback(async () => {
+    setEtlRunning(true);
+    setEtlMessage('Đang cập nhật bảng tổng hợp (ETL)...');
+    try {
+      await axios.post(`${DM_API}/etl/run`);
+      // Poll until ETL finishes
+      let attempts = 0;
+      while (attempts < 60) {
+        await new Promise(r => setTimeout(r, 2000));
+        const res = await axios.get(`${DM_API}/etl/status`);
+        if (!res.data.running) {
+          if (res.data.last_status === 'success') {
+            setEtlMessage('Cập nhật bảng tổng hợp thành công!');
+          } else {
+            setEtlMessage(`Lỗi ETL: ${res.data.last_error || 'Không xác định'}`);
+          }
+          break;
+        }
+        attempts++;
+      }
+      loadDwHealth();
+    } catch {
+      setEtlMessage('Lỗi khi chạy ETL pipeline');
+    } finally {
+      setEtlRunning(false);
+      setTimeout(() => setEtlMessage(null), 5000);
+    }
+  }, [loadDwHealth]);
 
   useEffect(() => {
     loadDwHealth();
     loadDataSources();
-    loadEtlStatus();
-  }, [loadDwHealth, loadDataSources, loadEtlStatus]);
+  }, [loadDwHealth, loadDataSources]);
 
   // Load schemas for Schema Editor tab
   useEffect(() => {
@@ -181,29 +203,7 @@ function DataManagementContent() {
     }
   }, [selectedTable, schemas]);
 
-  // ETL polling while running
-  useEffect(() => {
-    if (!etlPolling) return;
-    const interval = setInterval(() => {
-      loadEtlStatus();
-      if (etlStatus && !etlStatus.running) {
-        setEtlPolling(false);
-        loadDwHealth();
-      }
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [etlPolling, etlStatus, loadEtlStatus, loadDwHealth]);
-
   // ── Handlers ───────────────────────────────────────────────
-
-  const handleRunEtl = () => {
-    axios.post(`${DM_API}/etl/run`)
-      .then(() => {
-        setEtlPolling(true);
-        loadEtlStatus();
-      })
-      .catch(() => alert('Lỗi khi chạy ETL pipeline'));
-  };
 
   const handleTestSource = (sourceId: string) => {
     axios.post(`${DM_API}/data-sources/${sourceId}/test`)
@@ -263,8 +263,10 @@ function DataManagementContent() {
 
     try {
       const res = await axios.post(`${DM_API}/csv-transform-load`, formData);
-      setLoadResult(`Thành công! ${res.data.rows_affected} dòng được nạp vào ${targetTable}.`);
+      setLoadResult(`Thành công! ${res.data.rows_affected} dòng được nạp vào ${targetTable}. Đang cập nhật bảng tổng hợp...`);
       loadDwHealth();
+      // Tự động chạy ETL sau khi nạp dữ liệu
+      runEtlSilently();
     } catch (err: any) {
       setLoadResult(`Lỗi: ${err.response?.data?.detail || err.message}`);
     } finally {
@@ -317,6 +319,7 @@ function DataManagementContent() {
   };
 
   const handlePurge = async () => {
+    if (!startDate || !endDate) { alert('Vui lòng chọn Từ ngày và Đến ngày.'); return; }
     if (!confirm(`CẢNH BÁO: Rủi ro xóa dữ liệu trên bảng ${selectedTable}! Bạn có chắc chắn?`)) return;
     try {
       const res = await fetch(`${DM_API}/purge`, {
@@ -331,6 +334,9 @@ function DataManagementContent() {
       });
       const result = await res.json();
       alert(`Xóa thành công! Số dòng đã xóa: ${result.deleted_rows}, Còn lại: ${result.remaining_rows}`);
+      loadDwHealth();
+      // Tự động chạy ETL sau khi xóa dữ liệu
+      runEtlSilently();
     } catch { alert('Lỗi! Vui lòng kiểm tra lại Backup.'); }
   };
 
@@ -359,10 +365,9 @@ function DataManagementContent() {
 
   // Tab config
   const tabs: { key: TabKey; label: string; icon: React.ReactNode }[] = [
-    { key: 'overview', label: 'DW Overview', icon: <Activity size={16} /> },
-    { key: 'etl', label: 'ETL & Sources', icon: <Play size={16} /> },
-    { key: 'csv', label: 'CSV Upload', icon: <FileSpreadsheet size={16} /> },
-    { key: 'schema', label: 'Schema & Purge', icon: <Eye size={16} /> },
+    { key: 'overview', label: 'Tổng quan DW', icon: <Activity size={16} /> },
+    { key: 'csv', label: 'Nạp CSV', icon: <FileSpreadsheet size={16} /> },
+    { key: 'schema', label: 'Schema & Xóa dữ liệu', icon: <Eye size={16} /> },
   ];
 
   return (
@@ -376,15 +381,20 @@ function DataManagementContent() {
               <Database className="text-indigo-600" /> Quản Lý Dữ Liệu
             </h1>
             <p className="text-sm text-slate-500 mt-1">
-              ETL Pipeline &bull; CSV Ingestion &bull; Data Sources &bull; Data Warehouse Health
+              Nạp dữ liệu CSV &bull; Nguồn dữ liệu &bull; Sức khỏe Data Warehouse
             </p>
           </div>
-          <button
-            onClick={() => { loadDwHealth(); loadEtlStatus(); loadDataSources(); }}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-white border border-slate-300 rounded-lg hover:bg-slate-50"
-          >
-            <RefreshCw size={14} /> Refresh
-          </button>
+          {/* ETL status toast */}
+          {etlMessage && (
+            <div className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${
+              etlRunning ? 'bg-blue-50 text-blue-700 border border-blue-200' :
+              etlMessage.includes('thành công') ? 'bg-green-50 text-green-700 border border-green-200' :
+              'bg-red-50 text-red-700 border border-red-200'
+            }`}>
+              {etlRunning && <RefreshCw size={14} className="animate-spin" />}
+              {etlMessage}
+            </div>
+          )}
         </div>
 
         {/* ── Tab Navigation ─────────────────────────────────── */}
@@ -408,7 +418,7 @@ function DataManagementContent() {
         {activeTab === 'overview' && (
           <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
             <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-              <Activity className="text-emerald-500" /> Data Warehouse Overview
+              <Activity className="text-emerald-500" /> Tổng Quan Data Warehouse
             </h2>
 
             {healthLoading ? (
@@ -499,122 +509,16 @@ function DataManagementContent() {
           </div>
         )}
 
-        {/* ══════ TAB: ETL & Data Sources ═══════════════════ */}
-        {activeTab === 'etl' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* ETL Pipeline Control */}
-            <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-              <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-                <Play className="text-blue-500" /> ETL Pipeline
-              </h2>
-              <p className="text-sm text-slate-500 mb-4">
-                Xây dựng/cập nhật bảng aggregate từ dữ liệu DW gốc: Product ABC, Customer RFM,
-                KPI Summary, Store Monthly Costs.
-              </p>
-
-              {etlStatus && (
-                <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-4 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-slate-700">Trạng thái:</span>
-                    <StatusBadge status={etlStatus.last_status} />
-                  </div>
-                  {etlStatus.last_run && (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-slate-500">Lần chạy cuối:</span>
-                      <span className="text-slate-700">{new Date(etlStatus.last_run).toLocaleString('vi-VN')}</span>
-                    </div>
-                  )}
-                  {etlStatus.last_duration_seconds != null && (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-slate-500">Thời gian:</span>
-                      <span className="text-slate-700">{etlStatus.last_duration_seconds}s</span>
-                    </div>
-                  )}
-                  {etlStatus.tables_built.length > 0 && (
-                    <div className="text-sm">
-                      <span className="text-slate-500">Tables built:</span>
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {etlStatus.tables_built.map(t => (
-                          <span key={t} className="bg-green-100 text-green-700 px-2 py-0.5 rounded text-xs">{t}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {etlStatus.last_error && (
-                    <div className="text-sm text-red-600 flex items-start gap-1">
-                      <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
-                      <span>{etlStatus.last_error}</span>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <button
-                onClick={handleRunEtl}
-                disabled={etlStatus?.running}
-                className={`w-full py-3 font-bold rounded-lg flex items-center justify-center gap-2 transition-colors ${
-                  etlStatus?.running
-                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
-                    : 'bg-blue-600 hover:bg-blue-700 text-white'
-                }`}
-              >
-                {etlStatus?.running ? (
-                  <><RefreshCw size={18} className="animate-spin" /> Đang chạy ETL...</>
-                ) : (
-                  <><Play size={18} /> Chạy ETL Pipeline</>
-                )}
-              </button>
-            </div>
-
-            {/* Data Sources */}
-            <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-              <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-                <Link2 className="text-purple-500" /> Nguồn Dữ Liệu (Data Sources)
-              </h2>
-              <p className="text-sm text-slate-500 mb-4">
-                Kết nối với hệ thống POS hoặc database bên ngoài để trích xuất dữ liệu định kỳ.
-              </p>
-
-              {dataSources.length === 0 ? (
-                <p className="text-sm text-slate-400">Chưa có nguồn dữ liệu nào.</p>
-              ) : (
-                <div className="space-y-3">
-                  {dataSources.map(src => (
-                    <div key={src.id} className="bg-slate-50 border border-slate-200 rounded-lg p-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <Server size={16} className="text-slate-500" />
-                          <span className="font-semibold text-slate-800">{src.name}</span>
-                        </div>
-                        <StatusBadge status={src.status} />
-                      </div>
-                      <div className="text-xs text-slate-500 space-y-0.5">
-                        <p>Host: {src.host}:{src.port} | DB: {src.database} | User: {src.user}</p>
-                        {src.last_sync && <p>Đồng bộ cuối: {new Date(src.last_sync).toLocaleString('vi-VN')}</p>}
-                      </div>
-                      <button
-                        onClick={() => handleTestSource(src.id)}
-                        className="mt-2 text-sm px-3 py-1 bg-white border border-slate-300 rounded hover:bg-slate-50"
-                      >
-                        Test kết nối
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
         {/* ══════ TAB: CSV Upload ════════════════════════════ */}
         {activeTab === 'csv' && (
           <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
             <h2 className="text-lg font-bold text-slate-800 mb-2 flex items-center gap-2">
-              <FileSpreadsheet className="text-orange-500" /> Nạp File CSV/Excel → Star Schema Transform
+              <FileSpreadsheet className="text-orange-500" /> Nạp File CSV/Excel vào Data Warehouse
             </h2>
             <p className="text-sm text-slate-500 mb-4">
               Upload file CSV hoặc Excel, xem trước dữ liệu, mapping cột sang bảng DW, rồi nạp vào Data Warehouse.
               Dữ liệu sẽ tự động deduplicate theo Primary Key (UPSERT).
+              Sau khi nạp xong, hệ thống sẽ tự động cập nhật bảng tổng hợp (ETL Pipeline).
             </p>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -657,7 +561,7 @@ function DataManagementContent() {
               <div>
                 {csvPreview && targetTable && csvPreview.dw_tables[targetTable] ? (
                   <div>
-                    <h3 className="text-sm font-semibold text-slate-700 mb-2">Column Mapping (CSV → DW)</h3>
+                    <h3 className="text-sm font-semibold text-slate-700 mb-2">Mapping cột (CSV → DW)</h3>
                     <div className="max-h-72 overflow-y-auto space-y-2">
                       {csvPreview.columns.map(col => (
                         <div key={col} className="flex items-center gap-2">
@@ -694,7 +598,7 @@ function DataManagementContent() {
                       {csvUploading ? (
                         <><RefreshCw size={18} className="animate-spin" /> Đang nạp...</>
                       ) : (
-                        <><Upload size={18} /> Transform & Load vào DW</>
+                        <><Upload size={18} /> Nạp dữ liệu vào DW</>
                       )}
                     </button>
 
@@ -783,43 +687,20 @@ function DataManagementContent() {
                 </h2>
                 <div className="text-sm text-slate-600 mb-4 relative z-10 p-3 bg-red-50 border border-red-100 rounded-lg flex gap-3">
                   <AlertCircle className="text-red-500 flex-shrink-0" size={20} />
-                  <div>Dữ liệu sẽ được <b>Backup</b> trước khi purge. Chế độ: <b>{currentSchema?.deletion_strategy}</b></div>
+                  <div>Dữ liệu sẽ được <b>Backup</b> trước khi purge. Chỉ hỗ trợ: <b>FactSales</b> và <b>FactOnlineSales</b> theo khoảng ngày.</div>
                 </div>
 
                 <div className="space-y-4 relative z-10">
-                  {currentSchema && (
+                  <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Chiến Lược Xóa</label>
-                      <select
-                        value={currentSchema.deletion_strategy || ''}
-                        onChange={e => handleUpdateTableMeta('deletion_strategy', e.target.value)}
-                        className="w-full px-3 py-2 border rounded-md"
-                      >
-                        <option value="DATE_RANGE">Theo khoảng ngày (DATE_RANGE)</option>
-                        <option value="CATEGORY">Theo danh mục (CATEGORY)</option>
-                      </select>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Từ ngày</label>
+                      <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full px-3 py-2 border rounded-md" />
                     </div>
-                  )}
-                  {currentSchema?.deletion_strategy === 'DATE_RANGE' ? (
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Từ ngày</label>
-                        <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full px-3 py-2 border rounded-md" />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Đến ngày</label>
-                        <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full px-3 py-2 border rounded-md" />
-                      </div>
-                    </div>
-                  ) : (
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Chọn Category</label>
-                      <select value={selectedCategory} onChange={e => setSelectedCategory(e.target.value)} className="w-full px-3 py-2 border rounded-md">
-                        <option value="">-- Chọn --</option>
-                        {categories.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Đến ngày</label>
+                      <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full px-3 py-2 border rounded-md" />
                     </div>
-                  )}
+                  </div>
                   <button onClick={handlePurge} className="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg">
                     <Trash2 size={18} className="inline mr-2" /> Xác Nhận Xóa Dữ Liệu
                   </button>

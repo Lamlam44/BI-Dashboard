@@ -1,44 +1,49 @@
 import logging
-import os
-import sys
 import threading
-from pathlib import Path
+from contextlib import asynccontextmanager
 
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-current_dir = Path(__file__).parent
-sys.path.insert(0, str(current_dir))
-sys.path.insert(0, str(current_dir / "demand_forecasting"))
-sys.path.insert(0, str(current_dir / "data_management"))
-sys.path.insert(0, str(current_dir / "item_trends"))
-sys.path.insert(0, str(current_dir / "employee_performance"))
-sys.path.insert(0, str(current_dir / "realtime"))
-os.chdir(current_dir)
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-from auth_api import router as auth_router
-from data_management.main import app as data_app
-from demand_forecasting.app.main import app as forecast_app
-from item_trends.main import app as trends_app
-from employee_performance.api import router as employee_performance_router
-from sale_profit.api import router as sale_profit_router
-from realtime.main import app as realtime_app
+# ── Core imports ───────────────────────────────────────────────
+from core.auth.router import router as auth_router
+
+# ── Module routers ─────────────────────────────────────────────
+from modules.sale_profit.router import router as sale_profit_router
+from modules.employee_performance.router import router as employee_performance_router
+from modules.item_trends.router import router as item_trends_router
+from modules.data_management.router import router as data_management_router
+from modules.demand_forecasting.router import router as forecast_router
+from modules.realtime.router import router as realtime_router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    threading.Thread(target=_run_startup_etl, daemon=True).start()
+    threading.Thread(target=_run_periodic_etl, daemon=True).start()
+    yield
+
 
 app = FastAPI(
     title="BI Dashboard API",
-    version="5.0.0",
+    version="6.0.0",
     description="Retail BI Dashboard – Sales, Profit, Inventory, Forecasting & Employee Performance with Real-time Metrics",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
+        "http://localhost:3001",
+        "http://localhost:3002",
         "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+        "http://127.0.0.1:3002",
         "https://bi-dashboard-green.vercel.app",
     ],
     allow_credentials=True,
@@ -46,64 +51,55 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-app.mount("/realtime", realtime_app)
-app.mount("/data", data_app)
-app.mount("/forecast", forecast_app)
-app.mount("/trends", trends_app)
+# ── Register all routers ───────────────────────────────────────
 app.include_router(auth_router)
-app.include_router(employee_performance_router)
 app.include_router(sale_profit_router)
+app.include_router(employee_performance_router)
+app.include_router(item_trends_router,    prefix="/trends")
+app.include_router(data_management_router, prefix="/data")
+app.include_router(forecast_router,        prefix="/forecast")
+app.include_router(realtime_router,        prefix="/realtime")
 
 
 def _run_startup_etl():
     """Run DB migration + aggregate tables in background."""
     try:
-        from db_migration import run_migration
+        from migrations.db_migration import run_migration
         run_migration()
         logger.info("DB migration completed.")
     except Exception as exc:
         logger.warning("DB migration skipped: %s", exc)
 
     try:
-        from etl_pipeline import create_aggregate_tables
+        from migrations.etl_pipeline import create_aggregate_tables
         logger.info("Building aggregate KPI tables…")
         create_aggregate_tables()
     except Exception as exc:
         logger.warning("Aggregate table build skipped: %s", exc)
 
 
-@app.on_event("startup")
-async def on_startup():
-    threading.Thread(target=_run_startup_etl, daemon=True).start()
-
-
-@app.get("/")
-def root():
-    return {
-        "message": "BI Dashboard Backend is running.",
-        "version": "5.0.0",
-        "services": {
-            "auth": "/auth",
-            "realtime": "/realtime",
-            "data_management": "/data",
-            "demand_forecasting": "/forecast",
-            "item_trends": "/trends",
-            "employee_performance": "/employee-performance",
-            "sale_profit": "/sale-profit",
-        },
-    }
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
+def _run_periodic_etl():
+    """Auto-trigger full ETL pipeline every 30 seconds.
+    Syncs new POS orders → DW fact tables → aggregates → parquet cache.
+    Runs as a daemon thread so it never blocks the API server.
+    """
+    import time as _time
+    ETL_INTERVAL = 30  # 30 seconds — near real-time refresh
+    _time.sleep(ETL_INTERVAL)  # Wait before first run (startup ETL already ran)
+    while True:
+        try:
+            logger.info("Periodic ETL: starting incremental sync…")
+            from migrations.etl_pipeline import run_etl
+            run_etl()
+            from modules.sale_profit.service import refresh_sales_profit_cache, clear_all_caches
+            clear_all_caches()
+            refresh_sales_profit_cache()
+            logger.info("Periodic ETL: completed successfully.")
+        except Exception as exc:
+            logger.warning("Periodic ETL failed (non-critical): %s", exc)
+        _time.sleep(ETL_INTERVAL)
 
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("  BI Dashboard Backend v5.0.0")
-    print("  API: http://0.0.0.0:8000")
-    print("  Docs: http://0.0.0.0:8000/docs")
-    print("=" * 60)
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False, log_level="info")
+    from core.config import API_HOST, API_PORT
+    uvicorn.run("main:app", host=API_HOST, port=API_PORT, reload=True)

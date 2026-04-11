@@ -1,0 +1,27 @@
+{
+  "feature_columns": [
+    "SalesQuantity_lag_7",
+    "SalesQuantity_lag_14",
+    "SalesQuantity_lag_30",
+    "UnitPrice_lag_7",
+    "UnitPrice_lag_14",
+    "UnitPrice_lag_30",
+    "DiscountAmount_lag_7",
+    "DiscountAmount_lag_14",
+    "DiscountAmount_lag_30",
+    "SalesQuantity_rolling_mean_7",
+    "SalesQuantity_rolling_std_7",
+    "UnitPrice_rolling_mean_7",
+    "UnitPrice_rolling_std_7",
+    "DiscountAmount_rolling_mean_7",
+    "DiscountAmount_rolling_std_7",
+    "day_of_week",
+    "month",
+    "quarter",
+    "day_of_month",
+    "week_of_year",
+    "is_weekend",
+    "is_holiday"
+  ],
+  "last_training_product_id": "GLOBAL_BATCH_ID"
+}
