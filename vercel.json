@@ -1,0 +1,15 @@
+{
+  "buildCommand": "cd frontend && npm install && npm run build",
+  "outputDirectory": "frontend/.next",
+  "installCommand": "cd frontend && npm install",
+  "framework": "nextjs",
+  "nodeVersion": "18.x",
+  "env": {
+    "NEXT_PUBLIC_API_BASE_URL": "@api_base_url"
+  },
+  "regions": ["sfo1"],
+  "crons": [{
+    "path": "/api/cron/refresh",
+    "schedule": "0 */4 * * *"
+  }]
+}

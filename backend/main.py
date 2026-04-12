@@ -47,7 +47,7 @@ app.add_middleware(
         "http://127.0.0.1:3002",
         # [CLOUD] Vercel deployment URLs
         "https://bi-dashboard-green.vercel.app",
-        "https://*.vercel.app",
+        "https://*.vercel.app",  # Wildcard for all Vercel preview URLs
     ],
     allow_credentials=True,
     allow_methods=["*"],
