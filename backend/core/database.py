@@ -4,6 +4,7 @@ Single source of truth for DW engine, query helpers, and serialization.
 """
 
 import os
+import sys
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -12,6 +13,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 import config  # Import file config đã sửa để lấy thông số SSL
 
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # ── Use centralized configuration ──────────────────────────────────────────
 DB_HOST = config.DW_HOST
 DB_PORT = config.DW_PORT
