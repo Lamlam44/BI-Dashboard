@@ -17,7 +17,7 @@ DW_HOST = os.getenv("DB_HOST", "gateway01.ap-southeast-1.prod.aws.tidbcloud.com"
 DW_PORT = int(os.getenv("DB_PORT", "4000")) # TiDB Cloud sử dụng port 4000
 DW_USER = os.getenv("DB_USER", "3FhVda33nHpaura.root")
 DW_PASSWORD = os.getenv("DB_PASSWORD", "8KbTcgZ9LmZOBIrI")
-DW_DATABASE = os.getenv("DB_NAME", "test")
+DW_DATABASE = os.getenv("DB_NAME", "retails_dataset")
 
 # Cấu hình SSL (Bắt buộc cho TiDB Cloud Serverless)
 # Trên Render (Linux), file chứng chỉ hệ thống mặc định nằm ở đường dẫn này
