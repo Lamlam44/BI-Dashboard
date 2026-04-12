@@ -48,6 +48,12 @@ def _cache_set(key: str, payload):
         _ANALYTICS_CACHE[key] = (time.time() + _ANALYTICS_CACHE_TTL_SECONDS, payload)
 
 
+def clear_all_caches() -> None:
+    """Invalidate all analytics in-memory caches."""
+    with _ANALYTICS_CACHE_LOCK:
+        _ANALYTICS_CACHE.clear()
+
+
 def _fallback_customer_segments(start_date: Optional[str] = None, end_date: Optional[str] = None):
     where_clause, params = build_date_filter(start_date, end_date, alias="s")
     rows = fetch_all(

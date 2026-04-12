@@ -1,8 +1,7 @@
 {
     "FactSales": {
-        "display_name": "Doanh Số Bán Hàng (FactSales)",
+        "display_name": "Doanh So Ban Hang (FactSales)",
         "type": "Fact",
-        "deletion_strategy": "DATE_RANGE",
         "primary_keys": [
             "SalesKey"
         ],
@@ -10,111 +9,928 @@
             {
                 "name": "SalesKey",
                 "type": "int",
-                "description": "Khóa tự sinh"
+                "description": "Khoa tu sinh"
             },
             {
                 "name": "DateKey",
                 "type": "datetime",
-                "description": "Ngày bán"
+                "description": "Ngay ban"
             },
             {
                 "name": "channelKey",
                 "type": "int",
-                "description": "Kênh bán"
+                "description": "Kenh ban"
             },
             {
                 "name": "StoreKey",
                 "type": "int",
-                "description": "Cửa hàng"
+                "description": "Cua hang"
             },
             {
                 "name": "ProductKey",
                 "type": "int",
-                "description": "Sản phẩm"
+                "description": "San pham"
             },
             {
                 "name": "PromotionKey",
                 "type": "int",
-                "description": "Khuyến mãi"
+                "description": "Khuyen mai"
             },
             {
                 "name": "CurrencyKey",
                 "type": "int",
-                "description": "Loại tiền"
+                "description": "Loai tien"
             },
             {
                 "name": "UnitCost",
                 "type": "float",
-                "description": "Giá vốn"
+                "description": "Gia von"
             },
             {
                 "name": "UnitPrice",
                 "type": "float",
-                "description": "Giá bán"
+                "description": "Gia ban"
             },
             {
                 "name": "SalesQuantity",
                 "type": "int",
-                "description": "Số lượng"
+                "description": "So luong"
             },
             {
                 "name": "ReturnQuantity",
                 "type": "int",
-                "description": "Số lượng trả"
+                "description": "So luong tra"
             },
             {
                 "name": "ReturnAmount",
                 "type": "float",
-                "description": "Tổng tiền trả"
+                "description": "Tong tien tra"
             },
             {
                 "name": "DiscountQuantity",
                 "type": "int",
-                "description": "Số lượng giảm"
+                "description": "So luong giam"
             },
             {
                 "name": "DiscountAmount",
                 "type": "float",
-                "description": "Tổng tiền giảm"
+                "description": "Tong tien giam"
             },
             {
                 "name": "SalesAmount",
                 "type": "float",
-                "description": "Tổng doanh số"
+                "description": "Tong doanh so"
             },
             {
                 "name": "TotalCost",
                 "type": "float",
-                "description": "Tổng chi phí"
+                "description": "Tong chi phi"
             }
         ]
     },
     "FactOnlineSales": {
-        "display_name": "Doanh Số Online (FactOnlineSales)",
+        "display_name": "Doanh So Online (FactOnlineSales)",
         "type": "Fact",
-        "deletion_strategy": "DATE_RANGE",
         "primary_keys": [
             "OnlineSalesKey"
         ],
         "columns": [
-            {"name": "OnlineSalesKey", "type": "bigint", "description": "Khóa tự sinh"},
-            {"name": "DateKey", "type": "text", "description": "Ngày bán"},
-            {"name": "StoreKey", "type": "bigint", "description": "Cửa hàng"},
-            {"name": "ProductKey", "type": "bigint", "description": "Sản phẩm"},
-            {"name": "PromotionKey", "type": "bigint", "description": "Khuyến mãi"},
-            {"name": "CurrencyKey", "type": "bigint", "description": "Loại tiền"},
-            {"name": "CustomerKey", "type": "bigint", "description": "Khách hàng"},
-            {"name": "SalesOrderNumber", "type": "text", "description": "Số đơn hàng"},
-            {"name": "SalesOrderLineNumber", "type": "bigint", "description": "Dòng đơn hàng"},
-            {"name": "SalesQuantity", "type": "bigint", "description": "Số lượng"},
-            {"name": "SalesAmount", "type": "float", "description": "Tổng doanh số"},
-            {"name": "ReturnQuantity", "type": "bigint", "description": "Số lượng trả"},
-            {"name": "ReturnAmount", "type": "float", "description": "Tổng tiền trả"},
-            {"name": "DiscountQuantity", "type": "bigint", "description": "Số lượng giảm"},
-            {"name": "DiscountAmount", "type": "float", "description": "Tổng tiền giảm"},
-            {"name": "TotalCost", "type": "float", "description": "Tổng chi phí"},
-            {"name": "UnitCost", "type": "float", "description": "Giá vốn"},
-            {"name": "UnitPrice", "type": "float", "description": "Giá bán"}
+            {
+                "name": "OnlineSalesKey",
+                "type": "bigint",
+                "description": "Khoa tu sinh"
+            },
+            {
+                "name": "DateKey",
+                "type": "datetime",
+                "description": "Ngay ban"
+            },
+            {
+                "name": "StoreKey",
+                "type": "bigint",
+                "description": "Cua hang"
+            },
+            {
+                "name": "ProductKey",
+                "type": "bigint",
+                "description": "San pham"
+            },
+            {
+                "name": "PromotionKey",
+                "type": "bigint",
+                "description": "Khuyen mai"
+            },
+            {
+                "name": "CurrencyKey",
+                "type": "bigint",
+                "description": "Loai tien"
+            },
+            {
+                "name": "CustomerKey",
+                "type": "bigint",
+                "description": "Khach hang"
+            },
+            {
+                "name": "SalesOrderNumber",
+                "type": "text",
+                "description": "So don hang"
+            },
+            {
+                "name": "SalesOrderLineNumber",
+                "type": "bigint",
+                "description": "Dong don hang"
+            },
+            {
+                "name": "SalesQuantity",
+                "type": "bigint",
+                "description": "So luong"
+            },
+            {
+                "name": "SalesAmount",
+                "type": "float",
+                "description": "Tong doanh so"
+            },
+            {
+                "name": "ReturnQuantity",
+                "type": "bigint",
+                "description": "So luong tra"
+            },
+            {
+                "name": "ReturnAmount",
+                "type": "float",
+                "description": "Tong tien tra"
+            },
+            {
+                "name": "DiscountQuantity",
+                "type": "bigint",
+                "description": "So luong giam"
+            },
+            {
+                "name": "DiscountAmount",
+                "type": "float",
+                "description": "Tong tien giam"
+            },
+            {
+                "name": "TotalCost",
+                "type": "float",
+                "description": "Tong chi phi"
+            },
+            {
+                "name": "UnitCost",
+                "type": "float",
+                "description": "Gia von"
+            },
+            {
+                "name": "UnitPrice",
+                "type": "float",
+                "description": "Gia ban"
+            }
+        ]
+    },
+    "FactInventory": {
+        "display_name": "Kho Hang (FactInventory)",
+        "type": "Fact",
+        "primary_keys": [
+            "InventoryKey"
+        ],
+        "columns": [
+            {
+                "name": "InventoryKey",
+                "type": "bigint",
+                "description": "Khoa tu sinh"
+            },
+            {
+                "name": "DateKey",
+                "type": "datetime",
+                "description": "Ngay kiem ke"
+            },
+            {
+                "name": "StoreKey",
+                "type": "int",
+                "description": "Cua hang"
+            },
+            {
+                "name": "ProductKey",
+                "type": "int",
+                "description": "San pham"
+            },
+            {
+                "name": "CurrencyKey",
+                "type": "int",
+                "description": "Loai tien"
+            },
+            {
+                "name": "OnHandQuantity",
+                "type": "int",
+                "description": "So luong ton"
+            },
+            {
+                "name": "OnOrderQuantity",
+                "type": "int",
+                "description": "So luong dat hang"
+            },
+            {
+                "name": "SafetyStockQuantity",
+                "type": "int",
+                "description": "So luong an toan"
+            },
+            {
+                "name": "UnitCost",
+                "type": "float",
+                "description": "Gia von"
+            },
+            {
+                "name": "DaysInStock",
+                "type": "int",
+                "description": "Ngay ton kho"
+            },
+            {
+                "name": "MinDayInStock",
+                "type": "int",
+                "description": "Toi thieu ton"
+            },
+            {
+                "name": "MaxDayInStock",
+                "type": "int",
+                "description": "Toi da ton"
+            },
+            {
+                "name": "Aging",
+                "type": "int",
+                "description": "Tuoi hang ton"
+            }
+        ]
+    },
+    "FactExchangeRate": {
+        "display_name": "Ty Gia Hoi Doai (FactExchangeRate)",
+        "type": "Fact",
+        "primary_keys": [
+            "ExchangeRateKey"
+        ],
+        "columns": [
+            {
+                "name": "ExchangeRateKey",
+                "type": "int",
+                "description": "Khoa tu sinh"
+            },
+            {
+                "name": "CurrencyKey",
+                "type": "int",
+                "description": "Loai tien"
+            },
+            {
+                "name": "DateKey",
+                "type": "datetime",
+                "description": "Ngay"
+            },
+            {
+                "name": "AverageRate",
+                "type": "float",
+                "description": "Ty gia trung binh"
+            },
+            {
+                "name": "EndOfDayRate",
+                "type": "float",
+                "description": "Ty gia cuoi ngay"
+            }
+        ]
+    },
+    "FactSalesQuota": {
+        "display_name": "Han Ngach Ban Hang (FactSalesQuota)",
+        "type": "Fact",
+        "primary_keys": [
+            "SalesQuotaKey"
+        ],
+        "columns": [
+            {
+                "name": "SalesQuotaKey",
+                "type": "int",
+                "description": "Khoa tu sinh"
+            },
+            {
+                "name": "ChannelKey",
+                "type": "int",
+                "description": "Kenh ban"
+            },
+            {
+                "name": "StoreKey",
+                "type": "int",
+                "description": "Cua hang"
+            },
+            {
+                "name": "ProductKey",
+                "type": "int",
+                "description": "San pham"
+            },
+            {
+                "name": "DateKey",
+                "type": "datetime",
+                "description": "Ngay"
+            },
+            {
+                "name": "CurrencyKey",
+                "type": "int",
+                "description": "Loai tien"
+            },
+            {
+                "name": "ScenarioKey",
+                "type": "int",
+                "description": "Kich ban"
+            },
+            {
+                "name": "SalesQuantityQuota",
+                "type": "float",
+                "description": "Han ngach so luong"
+            },
+            {
+                "name": "SalesAmountQuota",
+                "type": "float",
+                "description": "Han ngach doanh so"
+            },
+            {
+                "name": "GrossMarginQuota",
+                "type": "float",
+                "description": "Han ngach loi nhuan"
+            }
+        ]
+    },
+    "DimProduct": {
+        "display_name": "San Pham (DimProduct)",
+        "type": "Dimension",
+        "primary_keys": [
+            "ProductKey"
+        ],
+        "columns": [
+            {
+                "name": "ProductKey",
+                "type": "int",
+                "description": "Ma san pham"
+            },
+            {
+                "name": "ProductName",
+                "type": "text",
+                "description": "Ten san pham"
+            },
+            {
+                "name": "ProductDescription",
+                "type": "text",
+                "description": "Mo ta san pham"
+            },
+            {
+                "name": "ProductSubcategoryKey",
+                "type": "int",
+                "description": "Ma danh muc phu"
+            },
+            {
+                "name": "Manufacturer",
+                "type": "text",
+                "description": "Nha san xuat"
+            },
+            {
+                "name": "BrandName",
+                "type": "text",
+                "description": "Thuong hieu"
+            },
+            {
+                "name": "ClassID",
+                "type": "text",
+                "description": "Ma phan loai"
+            },
+            {
+                "name": "ClassName",
+                "type": "text",
+                "description": "Ten phan loai"
+            },
+            {
+                "name": "StyleID",
+                "type": "text",
+                "description": "Ma kieu dang"
+            },
+            {
+                "name": "StyleName",
+                "type": "text",
+                "description": "Ten kieu dang"
+            },
+            {
+                "name": "ColorID",
+                "type": "text",
+                "description": "Ma mau"
+            },
+            {
+                "name": "ColorName",
+                "type": "text",
+                "description": "Ten mau"
+            },
+            {
+                "name": "Weight",
+                "type": "float",
+                "description": "Trong luong"
+            },
+            {
+                "name": "WeightUnitMeasureID",
+                "type": "text",
+                "description": "Don vi trong luong"
+            },
+            {
+                "name": "UnitCost",
+                "type": "float",
+                "description": "Gia von"
+            },
+            {
+                "name": "UnitPrice",
+                "type": "float",
+                "description": "Gia ban"
+            },
+            {
+                "name": "AvailableForSaleDate",
+                "type": "datetime",
+                "description": "Ngay ban"
+            },
+            {
+                "name": "Status",
+                "type": "text",
+                "description": "Trang thai"
+            }
+        ]
+    },
+    "DimStore": {
+        "display_name": "Cua Hang (DimStore)",
+        "type": "Dimension",
+        "primary_keys": [
+            "StoreKey"
+        ],
+        "columns": [
+            {
+                "name": "StoreKey",
+                "type": "int",
+                "description": "Ma cua hang"
+            },
+            {
+                "name": "GeographyKey",
+                "type": "int",
+                "description": "Dia ly"
+            },
+            {
+                "name": "StoreManager",
+                "type": "int",
+                "description": "Quan ly cua hang"
+            },
+            {
+                "name": "StoreType",
+                "type": "text",
+                "description": "Loai cua hang"
+            },
+            {
+                "name": "StoreName",
+                "type": "text",
+                "description": "Ten cua hang"
+            },
+            {
+                "name": "Status",
+                "type": "text",
+                "description": "Trang thai"
+            },
+            {
+                "name": "OpenDate",
+                "type": "datetime",
+                "description": "Ngay mo"
+            },
+            {
+                "name": "CloseDate",
+                "type": "datetime",
+                "description": "Ngay dong"
+            },
+            {
+                "name": "EmployeeCount",
+                "type": "int",
+                "description": "So nhan vien"
+            },
+            {
+                "name": "SellingAreaSize",
+                "type": "float",
+                "description": "Dien tich ban hang"
+            },
+            {
+                "name": "ZipCode",
+                "type": "text",
+                "description": "Ma buu chinh"
+            },
+            {
+                "name": "StorePhone",
+                "type": "text",
+                "description": "So dien thoai"
+            },
+            {
+                "name": "AddressLine1",
+                "type": "text",
+                "description": "Dia chi"
+            }
+        ]
+    },
+    "DimEmployee": {
+        "display_name": "Nhan Vien (DimEmployee)",
+        "type": "Dimension",
+        "primary_keys": [
+            "EmployeeKey"
+        ],
+        "columns": [
+            {
+                "name": "EmployeeKey",
+                "type": "int",
+                "description": "Ma nhan vien"
+            },
+            {
+                "name": "ParentEmployeeKey",
+                "type": "int",
+                "description": "Manager"
+            },
+            {
+                "name": "FirstName",
+                "type": "text",
+                "description": "Ten"
+            },
+            {
+                "name": "LastName",
+                "type": "text",
+                "description": "Ho"
+            },
+            {
+                "name": "Title",
+                "type": "text",
+                "description": "Chuc danh"
+            },
+            {
+                "name": "HireDate",
+                "type": "datetime",
+                "description": "Ngay vao lam"
+            },
+            {
+                "name": "BirthDate",
+                "type": "datetime",
+                "description": "Ngay sinh"
+            },
+            {
+                "name": "EmailAddress",
+                "type": "text",
+                "description": "Email"
+            },
+            {
+                "name": "Phone",
+                "type": "text",
+                "description": "Dien thoai"
+            },
+            {
+                "name": "Gender",
+                "type": "text",
+                "description": "Gioi tinh"
+            },
+            {
+                "name": "PayFrequency",
+                "type": "int",
+                "description": "Tan suat luong"
+            },
+            {
+                "name": "BaseRate",
+                "type": "float",
+                "description": "Luong co ban"
+            },
+            {
+                "name": "VacationHours",
+                "type": "int",
+                "description": "Gio nghi phep"
+            },
+            {
+                "name": "DepartmentName",
+                "type": "text",
+                "description": "Phong ban"
+            },
+            {
+                "name": "StartDate",
+                "type": "datetime",
+                "description": "Ngay bat dau"
+            },
+            {
+                "name": "Status",
+                "type": "text",
+                "description": "Trang thai"
+            }
+        ]
+    },
+    "DimCustomer": {
+        "display_name": "Khach Hang (DimCustomer)",
+        "type": "Dimension",
+        "primary_keys": [
+            "CustomerKey"
+        ],
+        "columns": [
+            {
+                "name": "CustomerKey",
+                "type": "int",
+                "description": "Ma khach hang"
+            },
+            {
+                "name": "GeographyKey",
+                "type": "int",
+                "description": "Dia ly"
+            },
+            {
+                "name": "FirstName",
+                "type": "text",
+                "description": "Ten"
+            },
+            {
+                "name": "LastName",
+                "type": "text",
+                "description": "Ho"
+            },
+            {
+                "name": "BirthDate",
+                "type": "datetime",
+                "description": "Ngay sinh"
+            },
+            {
+                "name": "MaritalStatus",
+                "type": "text",
+                "description": "Hon nhan"
+            },
+            {
+                "name": "Gender",
+                "type": "text",
+                "description": "Gioi tinh"
+            },
+            {
+                "name": "YearlyIncome",
+                "type": "float",
+                "description": "Thu nhap nam"
+            },
+            {
+                "name": "TotalChildren",
+                "type": "int",
+                "description": "So con"
+            },
+            {
+                "name": "NumberChildrenAtHome",
+                "type": "int",
+                "description": "Con song chung"
+            },
+            {
+                "name": "Education",
+                "type": "text",
+                "description": "Hoc van"
+            },
+            {
+                "name": "Occupation",
+                "type": "text",
+                "description": "Nghe nghiep"
+            },
+            {
+                "name": "HouseOwnerFlag",
+                "type": "int",
+                "description": "So huu nha"
+            },
+            {
+                "name": "NumberCarsOwned",
+                "type": "int",
+                "description": "So xe so huu"
+            }
+        ]
+    },
+    "DimChannel": {
+        "display_name": "Kenh Ban Hang (DimChannel)",
+        "type": "Dimension",
+        "primary_keys": [
+            "ChannelKey"
+        ],
+        "columns": [
+            {
+                "name": "ChannelKey",
+                "type": "int",
+                "description": "Ma kenh"
+            },
+            {
+                "name": "ChannelName",
+                "type": "text",
+                "description": "Ten kenh"
+            },
+            {
+                "name": "ChannelDescription",
+                "type": "text",
+                "description": "Mo ta"
+            }
+        ]
+    },
+    "DimPromotion": {
+        "display_name": "Khuyen Mai (DimPromotion)",
+        "type": "Dimension",
+        "primary_keys": [
+            "PromotionKey"
+        ],
+        "columns": [
+            {
+                "name": "PromotionKey",
+                "type": "int",
+                "description": "Ma khuyen mai"
+            },
+            {
+                "name": "PromotionName",
+                "type": "text",
+                "description": "Ten khuyen mai"
+            },
+            {
+                "name": "DiscountPercent",
+                "type": "float",
+                "description": "% giam gia"
+            },
+            {
+                "name": "PromotionType",
+                "type": "text",
+                "description": "Loai khuyen mai"
+            },
+            {
+                "name": "PromotionCategory",
+                "type": "text",
+                "description": "Danh muc"
+            },
+            {
+                "name": "StartDate",
+                "type": "datetime",
+                "description": "Ngay bat dau"
+            },
+            {
+                "name": "EndDate",
+                "type": "datetime",
+                "description": "Ngay ket thuc"
+            },
+            {
+                "name": "MinQuantity",
+                "type": "int",
+                "description": "So luong toi thieu"
+            },
+            {
+                "name": "MaxQuantity",
+                "type": "int",
+                "description": "So luong toi da"
+            }
+        ]
+    },
+    "DimCurrency": {
+        "display_name": "Loai Tien Te (DimCurrency)",
+        "type": "Dimension",
+        "primary_keys": [
+            "CurrencyKey"
+        ],
+        "columns": [
+            {
+                "name": "CurrencyKey",
+                "type": "int",
+                "description": "Ma tien te"
+            },
+            {
+                "name": "CurrencyName",
+                "type": "text",
+                "description": "Ten tien te"
+            },
+            {
+                "name": "CurrencyDescription",
+                "type": "text",
+                "description": "Mo ta"
+            }
+        ]
+    },
+    "DimGeography": {
+        "display_name": "Dia Ly (DimGeography)",
+        "type": "Dimension",
+        "primary_keys": [
+            "GeographyKey"
+        ],
+        "columns": [
+            {
+                "name": "GeographyKey",
+                "type": "int",
+                "description": "Ma dia ly"
+            },
+            {
+                "name": "GeographyType",
+                "type": "text",
+                "description": "Loai dia ly"
+            },
+            {
+                "name": "ContinentName",
+                "type": "text",
+                "description": "Chau luc"
+            },
+            {
+                "name": "CityName",
+                "type": "text",
+                "description": "Thanh pho"
+            },
+            {
+                "name": "StateProvinceName",
+                "type": "text",
+                "description": "Tinh/Bang"
+            },
+            {
+                "name": "RegionCountryName",
+                "type": "text",
+                "description": "Quoc gia"
+            },
+            {
+                "name": "ZipCode",
+                "type": "text",
+                "description": "Ma buu chinh"
+            }
+        ]
+    },
+    "DimProductCategory": {
+        "display_name": "Danh Muc San Pham (DimProductCategory)",
+        "type": "Dimension",
+        "primary_keys": [
+            "ProductCategoryKey"
+        ],
+        "columns": [
+            {
+                "name": "ProductCategoryKey",
+                "type": "int",
+                "description": "Ma danh muc"
+            },
+            {
+                "name": "ProductCategoryName",
+                "type": "text",
+                "description": "Ten danh muc"
+            }
+        ]
+    },
+    "DimProductSubcategory": {
+        "display_name": "Danh Muc Phu (DimProductSubcategory)",
+        "type": "Dimension",
+        "primary_keys": [
+            "ProductSubcategoryKey"
+        ],
+        "columns": [
+            {
+                "name": "ProductSubcategoryKey",
+                "type": "int",
+                "description": "Ma danh muc phu"
+            },
+            {
+                "name": "ProductSubcategoryName",
+                "type": "text",
+                "description": "Ten danh muc phu"
+            },
+            {
+                "name": "ProductCategoryKey",
+                "type": "int",
+                "description": "Ma danh muc cha"
+            }
+        ]
+    },
+    "DimDate": {
+        "display_name": "Lich (DimDate)",
+        "type": "Dimension",
+        "primary_keys": [
+            "DateKey"
+        ],
+        "columns": [
+            {
+                "name": "DateKey",
+                "type": "datetime",
+                "description": "Ngay"
+            },
+            {
+                "name": "CalendarYear",
+                "type": "int",
+                "description": "Nam"
+            },
+            {
+                "name": "CalendarYearLabel",
+                "type": "text",
+                "description": "Nhan nam"
+            },
+            {
+                "name": "CalendarHalfYearLabel",
+                "type": "text",
+                "description": "Nhan nua nam"
+            },
+            {
+                "name": "CalendarQuarterLabel",
+                "type": "text",
+                "description": "Nhan quy"
+            },
+            {
+                "name": "CalendarMonthLabel",
+                "type": "text",
+                "description": "Nhan thang"
+            },
+            {
+                "name": "CalendarWeekLabel",
+                "type": "text",
+                "description": "Nhan tuan"
+            },
+            {
+                "name": "CalendarDayOfWeekLabel",
+                "type": "text",
+                "description": "Nhan ngay trong tuan"
+            }
         ]
     }
 }

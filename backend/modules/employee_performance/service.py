@@ -37,6 +37,14 @@ def _cache_set(key: str, payload: Any) -> None:
         _EMP_PERF_CACHE[key] = (time.time() + _CACHE_TTL_SECONDS, payload)
 
 
+def clear_all_caches() -> None:
+    """Invalidate all in-memory caches so next request fetches fresh data."""
+    global _LATEST_YEAR_CACHE
+    with _EMP_PERF_CACHE_LOCK:
+        _EMP_PERF_CACHE.clear()
+    _LATEST_YEAR_CACHE = (0, None)
+
+
 def _normalize_int(value: Optional[int]) -> Optional[int]:
     if value is None:
         return None

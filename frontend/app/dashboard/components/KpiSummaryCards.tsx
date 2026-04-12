@@ -66,44 +66,53 @@ export default function KpiSummaryCards({ startDate, endDate }: KpiSummaryCardsP
       value: fmtMoney(kpis.total_revenue || 0),
       icon: '💰',
       color: 'border-blue-500',
+      showWhenFiltered: true,
     },
     {
       label: 'Tổng giao dịch',
       value: fmtNum(kpis.total_transactions || 0),
       icon: '🧾',
       color: 'border-purple-500',
+      showWhenFiltered: false,
     },
     {
       label: 'Giá trị TB / giao dịch',
       value: fmtMoney(kpis.avg_transaction_value || 0),
       icon: '🛒',
       color: 'border-green-500',
+      showWhenFiltered: false,
     },
     {
       label: 'Số lượng TB / đơn hàng',
       value: (kpis.avg_basket_size || 0).toFixed(1) + ' items',
       icon: '📦',
       color: 'border-orange-500',
+      showWhenFiltered: false,
     },
     {
       label: 'Biên lợi nhuận gộp',
       value: (kpis.gross_margin || 0).toFixed(1) + '%',
       icon: '📊',
       color: 'border-emerald-500',
+      showWhenFiltered: true,
     },
     {
       label: 'Khách hàng',
       value: fmtNum(kpis.unique_customers || 0),
       icon: '👥',
       color: 'border-cyan-500',
+      showWhenFiltered: true,
     },
     {
       label: 'Sản phẩm',
       value: fmtNum(kpis.product_count || 0),
       icon: '🏷️',
       color: 'border-rose-500',
+      showWhenFiltered: true,
     },
   ];
+
+  const visibleCards = isFiltered ? cards.filter(c => c.showWhenFiltered) : cards;
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
@@ -127,7 +136,7 @@ export default function KpiSummaryCards({ startDate, endDate }: KpiSummaryCardsP
         )}
       </div>
       <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-4">
-        {cards.map((c, idx) => (
+        {visibleCards.map((c, idx) => (
           <div key={idx} className={`rounded-lg border-l-4 ${c.color} bg-slate-50 p-4`}>
             <div className="text-xl mb-1">{c.icon}</div>
             <p className="text-xs text-slate-500 font-medium">{c.label}</p>

@@ -363,52 +363,93 @@ def get_kpi_summary(
     end_date: Optional[str] = None,
     rls_store_keys: Optional[List[int]] = None,
 ) -> Dict[str, Any]:
-    """Return KPI summary. When date filters are provided, computes live from snapshot.
-    Without filters, uses the pre-aggregated agg_kpi_summary table (fast path).
+    """Return KPI summary.
+    - Without filters: uses pre-aggregated agg_kpi_summary (fast).
+    - With date/RLS filter: queries summary_daily_sales+DimProduct for revenue/cost/margin
+      and FactOnlineSales for unique_customers. Metrics that require full FactSales scan
+      (total_transactions, avg_transaction_value, avg_basket_size) are omitted because
+      they cannot be computed accurately in acceptable time on the filtered dataset.
     """
+    engine = get_engine()
+
     if start_date or end_date or rls_store_keys is not None:
-        # Live computation from snapshot with date/RLS filter
-        snapshot = load_sales_profit_snapshot(force_refresh=False)
-        if snapshot.empty:
-            return {"status": "empty", "source": "live", "kpis": {}}
+        cache_key = f"kpi_filtered|{start_date}|{end_date}|{sorted(rls_store_keys) if rls_store_keys else None}"
+        cached = _simple_cache_get(cache_key)
+        if cached is not None:
+            return cached
 
-        df = snapshot.copy()
-        if "Date" not in df.columns:
-            df["Date"] = _parse_dates(df["DateKey"])
-        df = df.dropna(subset=["Date"])
-
+        where = "1=1"
+        params: Dict[str, Any] = {}
         if start_date:
-            df = df[df["Date"] >= pd.to_datetime(start_date)]
+            where += " AND sds.DateKey >= :start_date"
+            params["start_date"] = start_date
         if end_date:
-            df = df[df["Date"] <= pd.to_datetime(end_date)]
+            where += " AND sds.DateKey <= :end_date"
+            params["end_date"] = end_date
         if rls_store_keys is not None:
-            df = df[df["StoreKey"].isin(rls_store_keys)]
+            keys_csv = ",".join(str(k) for k in rls_store_keys) if rls_store_keys else "0"
+            where += f" AND sds.StoreKey IN ({keys_csv})"
 
-        if df.empty:
+        q_main = text(f"""
+            SELECT
+                SUM(sds.total_sales_amount
+                    - COALESCE(sds.total_return_amount, 0)
+                    - COALESCE(sds.total_discount_amount, 0))     AS net_sales,
+                SUM(sds.total_sales_quantity * COALESCE(p.UnitCost, 0)) AS total_cost,
+                COUNT(DISTINCT sds.ProductKey)                    AS product_count,
+                COUNT(DISTINCT sds.StoreKey)                      AS active_stores
+            FROM summary_daily_sales sds
+            LEFT JOIN DimProduct p ON p.ProductKey = sds.ProductKey
+            WHERE {where}
+        """)
+
+        where_online = "CustomerKey IS NOT NULL"
+        params_online: Dict[str, Any] = {}
+        if start_date:
+            where_online += " AND DateKey >= :start_date"
+            params_online["start_date"] = start_date
+        if end_date:
+            where_online += " AND DateKey <= :end_date"
+            params_online["end_date"] = end_date
+
+        q_customers = text(f"""
+            SELECT COUNT(DISTINCT CustomerKey) AS unique_customers
+            FROM FactOnlineSales
+            WHERE {where_online}
+        """)
+
+        try:
+            with engine.connect() as conn:
+                row = conn.execute(q_main, params).mappings().first()
+                cust_row = conn.execute(q_customers, params_online).mappings().first()
+        except Exception as exc:
+            logger.warning("get_kpi_summary filtered query failed: %s", exc)
             return {"status": "empty", "source": "live", "kpis": {}}
 
-        total_rev = float(df["total_sales"].sum())
-        total_cost = float(df["total_cost"].sum())
-        total_profit = total_rev - total_cost
-        n_stores = int(df["StoreKey"].nunique())
+        if not row or row["net_sales"] is None:
+            return {"status": "empty", "source": "live", "kpis": {}}
 
-        # total_transactions and avg_transaction_value: count daily rows as proxy
-        # Use sum of net sales / avg per day
-        avg_txn_value = float((df["total_sales"] / df["total_sales"].count()).mean()) if not df.empty else 0
+        net_sales = float(row["net_sales"] or 0)
+        total_cost = float(row["total_cost"] or 0)
+        gross_profit = net_sales - total_cost
+        gross_margin = round((gross_profit / net_sales * 100) if net_sales else 0, 2)
 
-        return {
+        result = {
             "status": "success",
             "source": "live",
             "kpis": {
-                "total_revenue": total_rev,
-                "total_profit": total_profit,
-                "gross_margin": round((total_profit / total_rev * 100) if total_rev else 0, 2),
-                "active_stores": n_stores,
+                "total_revenue":    net_sales,
+                "total_profit":     gross_profit,
+                "gross_margin":     gross_margin,
+                "active_stores":    int(row["active_stores"] or 0),
+                "product_count":    int(row["product_count"] or 0),
+                "unique_customers": int(cust_row["unique_customers"] or 0) if cust_row else 0,
             },
         }
+        _simple_cache_set(cache_key, result)
+        return result
 
-    # No filter â€” use pre-aggregated table for speed
-    engine = get_engine()
+    # No filter -- use pre-aggregated table for speed
     try:
         query = text("SELECT kpi_key, kpi_value FROM agg_kpi_summary ORDER BY kpi_key")
         with engine.connect() as conn:
@@ -419,53 +460,7 @@ def get_kpi_summary(
     except Exception:
         pass
 
-    # Fallback: compute live from snapshot + direct DB queries for missing fields
-    snapshot = load_sales_profit_snapshot(force_refresh=False)
-    if snapshot.empty:
-        return {"status": "empty", "kpis": {}}
-
-    total_rev = float(snapshot["total_sales"].sum())
-    total_cost = float(snapshot["total_cost"].sum())
-    total_profit = total_rev - total_cost
-    n_stores = int(snapshot["StoreKey"].nunique())
-
-    # Enrich with simple DB counts that the snapshot does not have
-    product_count = 0
-    unique_customers = 0
-    total_transactions = 0
-    avg_basket_size = 0.0
-    try:
-        with engine.connect() as conn:
-            product_count    = conn.execute(text("SELECT COUNT(*) FROM DimProduct")).scalar() or 0
-            unique_customers = conn.execute(text(
-                "SELECT COUNT(DISTINCT CustomerKey) FROM FactOnlineSales WHERE CustomerKey IS NOT NULL"
-            )).scalar() or 0
-            txn_row = conn.execute(text(
-                "SELECT COUNT(*) AS cnt, AVG(SalesQuantity) AS avg_qty FROM v_total_sales"
-            )).mappings().first()
-            if txn_row:
-                total_transactions = int(txn_row["cnt"] or 0)
-                avg_basket_size    = float(txn_row["avg_qty"] or 0.0)
-    except Exception:
-        pass
-
-    avg_txn_value = round(total_rev / total_transactions, 2) if total_transactions else 0.0
-
-    return {
-        "status": "success",
-        "source": "live",
-        "kpis": {
-            "total_revenue":         total_rev,
-            "total_profit":          total_profit,
-            "gross_margin":          round((total_profit / total_rev * 100) if total_rev else 0, 2),
-            "active_stores":         n_stores,
-            "product_count":         int(product_count),
-            "unique_customers":      int(unique_customers),
-            "total_transactions":    total_transactions,
-            "avg_transaction_value": avg_txn_value,
-            "avg_basket_size":       avg_basket_size,
-        },
-    }
+    return {"status": "empty", "kpis": {}}
 
 
 def refresh_sales_profit_cache() -> Dict[str, Any]:

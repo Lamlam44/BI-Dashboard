@@ -4,10 +4,10 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import DashboardLayout from '../components/DashboardLayout';
 import {
-  Upload, Database, RefreshCw, Activity, Server,
+  Upload, Database, RefreshCw, Activity,
   Table2, FileSpreadsheet, CheckCircle2,
-  XCircle, Clock, ChevronDown, ChevronUp, AlertTriangle,
-  Trash2, AlertCircle, Download, Eye,
+  XCircle, Clock, ChevronDown, ChevronUp,
+  Download, FileDown,
 } from 'lucide-react';
 import axios from 'axios';
 import { useAuth } from '../store/useAuth';
@@ -68,7 +68,7 @@ interface CsvPreview {
 
 const fmtNum = (n: number) => new Intl.NumberFormat('vi-VN').format(n);
 
-type TabKey = 'overview' | 'csv' | 'schema';
+type TabKey = 'overview' | 'csv';
 
 const StatusBadge = ({ status }: { status: string }) => {
   const colors: Record<string, string> = {
@@ -95,6 +95,37 @@ const StatusBadge = ({ status }: { status: string }) => {
 };
 
 // ═══════════════════════════════════════════════════════════════
+// Fallback table list (used when API not yet loaded)
+// ═══════════════════════════════════════════════════════════════
+const FALLBACK_DIM_FACT_TABLES: { table_name: string; row_count: number }[] = [
+  { table_name: 'FactSales',          row_count: 0 },
+  { table_name: 'FactOnlineSales',    row_count: 0 },
+  { table_name: 'FactInventory',      row_count: 0 },
+  { table_name: 'FactExchangeRate',   row_count: 0 },
+  { table_name: 'FactITMachine',      row_count: 0 },
+  { table_name: 'FactITSLA',          row_count: 0 },
+  { table_name: 'FactSalesQuota',     row_count: 0 },
+  { table_name: 'FactStrategyPlan',   row_count: 0 },
+  { table_name: 'DimProduct',         row_count: 0 },
+  { table_name: 'DimProductCategory', row_count: 0 },
+  { table_name: 'DimProductSubcategory', row_count: 0 },
+  { table_name: 'DimStore',           row_count: 0 },
+  { table_name: 'DimCustomer',        row_count: 0 },
+  { table_name: 'DimEmployee',        row_count: 0 },
+  { table_name: 'DimPromotion',       row_count: 0 },
+  { table_name: 'DimDate',            row_count: 0 },
+  { table_name: 'DimChannel',         row_count: 0 },
+  { table_name: 'DimCurrency',        row_count: 0 },
+  { table_name: 'DimGeography',       row_count: 0 },
+  { table_name: 'DimSalesTerritory',  row_count: 0 },
+  { table_name: 'DimAccount',         row_count: 0 },
+  { table_name: 'DimEntity',          row_count: 0 },
+  { table_name: 'DimMachine',         row_count: 0 },
+  { table_name: 'DimScenario',        row_count: 0 },
+  { table_name: 'DimOutage',          row_count: 0 },
+];
+
+// ═══════════════════════════════════════════════════════════════
 // Main Component
 // ═══════════════════════════════════════════════════════════════
 
@@ -108,7 +139,7 @@ function DataManagementContent() {
   // Data Sources
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
 
-  // ETL Status (auto-triggered after CSV/Purge)
+  // Fast-refresh status banner
   const [etlRunning, setEtlRunning] = useState(false);
   const [etlMessage, setEtlMessage] = useState<string | null>(null);
 
@@ -120,14 +151,11 @@ function DataManagementContent() {
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
   const [loadResult, setLoadResult] = useState<string | null>(null);
 
-  // Schema Editor (keep from original)
-  const [schemas, setSchemas] = useState<any>({});
-  const [selectedTable, setSelectedTable] = useState<string>('');
-  const [isEditingSchema, setIsEditingSchema] = useState(false);
-  const [categories, setCategories] = useState<string[]>([]);
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('');
+  // Export template — khởi tạo ngay với fallback list để dropdown luôn có dữ liệu
+  const [dimFactTables, setDimFactTables] = useState<{ table_name: string; row_count: number }[]>(FALLBACK_DIM_FACT_TABLES);
+  const [exportTable, setExportTable] = useState('');
+  const [exportFormat, setExportFormat] = useState<'csv' | 'excel'>('excel');
+  const [exportLoading, setExportLoading] = useState(false);
 
   // Sections toggle
   const [showDim, setShowDim] = useState(false);
@@ -149,29 +177,15 @@ function DataManagementContent() {
       .catch(() => {});
   }, []);
 
-  const runEtlSilently = useCallback(async () => {
+  const runFastRefresh = useCallback(async () => {
     setEtlRunning(true);
-    setEtlMessage('Đang cập nhật bảng tổng hợp (ETL)...');
+    setEtlMessage('Đang cập nhật dữ liệu real-time...');
     try {
-      await axios.post(`${DM_API}/etl/run`);
-      // Poll until ETL finishes
-      let attempts = 0;
-      while (attempts < 60) {
-        await new Promise(r => setTimeout(r, 2000));
-        const res = await axios.get(`${DM_API}/etl/status`);
-        if (!res.data.running) {
-          if (res.data.last_status === 'success') {
-            setEtlMessage('Cập nhật bảng tổng hợp thành công!');
-          } else {
-            setEtlMessage(`Lỗi ETL: ${res.data.last_error || 'Không xác định'}`);
-          }
-          break;
-        }
-        attempts++;
-      }
+      await axios.post(`${DM_API}/etl/fast-refresh`);
+      setEtlMessage('Cập nhật dữ liệu thành công!');
       loadDwHealth();
     } catch {
-      setEtlMessage('Lỗi khi chạy ETL pipeline');
+      setEtlMessage('Lỗi cập nhật dữ liệu');
     } finally {
       setEtlRunning(false);
       setTimeout(() => setEtlMessage(null), 5000);
@@ -181,27 +195,17 @@ function DataManagementContent() {
   useEffect(() => {
     loadDwHealth();
     loadDataSources();
+    // Load danh sách bảng DIM/FACT với row count từ API; fallback list luôn sẵn
+    axios.get(`${DM_API}/dim-fact-tables`)
+      .then(res => {
+        if (Array.isArray(res.data) && res.data.length > 0) {
+          setDimFactTables(res.data);
+        }
+      })
+      .catch(() => { /* giữ nguyên fallback list */ });
   }, [loadDwHealth, loadDataSources]);
 
-  // Load schemas for Schema Editor tab
-  useEffect(() => {
-    fetch(`${DM_API}/schema`)
-      .then(res => res.json())
-      .then(data => {
-        setSchemas(data);
-        if (Object.keys(data).length > 0) setSelectedTable(Object.keys(data)[0]);
-      })
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (selectedTable && schemas[selectedTable]?.deletion_strategy === 'CATEGORY') {
-      fetch(`${DM_API}/categories/${selectedTable}`)
-        .then(res => res.json())
-        .then(data => setCategories(data))
-        .catch(() => {});
-    }
-  }, [selectedTable, schemas]);
+  // ── Handlers ───────────────────────────────────────────────
 
   // ── Handlers ───────────────────────────────────────────────
 
@@ -263,10 +267,15 @@ function DataManagementContent() {
 
     try {
       const res = await axios.post(`${DM_API}/csv-transform-load`, formData);
-      setLoadResult(`Thành công! ${res.data.rows_affected} dòng được nạp vào ${targetTable}. Đang cập nhật bảng tổng hợp...`);
+      let msg = `Thành công! ${res.data.rows_processed} dòng xử lý, ${res.data.rows_affected} dòng được nạp vào ${targetTable}.`;
+      if (res.data.skipped_duplicate_ids?.length > 0) {
+        const ids = res.data.skipped_duplicate_ids.slice(0, 30).join(', ');
+        const more = res.data.skipped_duplicate_ids.length > 30 ? ` ... và ${res.data.skipped_duplicate_ids.length - 30} ID khác` : '';
+        msg += `\nBỏ qua ${res.data.skipped_duplicate_ids.length} đối tượng đã tồn tại (PK trùng): ${ids}${more}`;
+      }
+      setLoadResult(msg);
       loadDwHealth();
-      // Tự động chạy ETL sau khi nạp dữ liệu
-      runEtlSilently();
+      runFastRefresh();
     } catch (err: any) {
       setLoadResult(`Lỗi: ${err.response?.data?.detail || err.message}`);
     } finally {
@@ -286,61 +295,25 @@ function DataManagementContent() {
     setColumnMapping(autoMap);
   }, [targetTable, csvPreview]);
 
-  // Schema handlers
-  const handleUpdateTableMeta = (field: string, value: string) => {
-    setSchemas((prev: any) => ({
-      ...prev,
-      [selectedTable]: { ...prev[selectedTable], [field]: value }
-    }));
-  };
-
-  const handleUpdateColumnMeta = (colIndex: number, field: string, value: any) => {
-    setSchemas((prev: any) => {
-      const updatedTable = { ...prev[selectedTable] };
-      const updatedCols = [...updatedTable.columns];
-      updatedCols[colIndex] = { ...updatedCols[colIndex], [field]: value };
-      updatedTable.columns = updatedCols;
-      return { ...prev, [selectedTable]: updatedTable };
-    });
-  };
-
-  const handleSaveSchema = async () => {
+  const handleExportTemplate = async () => {
+    if (!exportTable) return;
+    setExportLoading(true);
     try {
-      const res = await fetch(`${DM_API}/schema`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(schemas)
-      });
-      if (res.ok) {
-        alert('Đã lưu cấu hình Schema thành công!');
-        setIsEditingSchema(false);
-      } else { alert('Lỗi lưu cấu hình.'); }
-    } catch { alert('Lỗi gọi API lưu cấu hình.'); }
+      const url = `${DM_API}/table-structure-template?table_name=${encodeURIComponent(exportTable)}&format=${exportFormat}`;
+      const res = await axios.get(url, { responseType: 'blob' });
+      const ext = exportFormat === 'excel' ? 'xlsx' : 'csv';
+      const blobUrl = window.URL.createObjectURL(new Blob([res.data]));
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = `template_${exportTable}.${ext}`;
+      link.click();
+      window.URL.revokeObjectURL(blobUrl);
+    } catch {
+      alert('Lỗi khi xuất template');
+    } finally {
+      setExportLoading(false);
+    }
   };
-
-  const handlePurge = async () => {
-    if (!startDate || !endDate) { alert('Vui lòng chọn Từ ngày và Đến ngày.'); return; }
-    if (!confirm(`CẢNH BÁO: Rủi ro xóa dữ liệu trên bảng ${selectedTable}! Bạn có chắc chắn?`)) return;
-    try {
-      const res = await fetch(`${DM_API}/purge`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          table_name: selectedTable,
-          start_date: startDate || undefined,
-          end_date: endDate || undefined,
-          category: selectedCategory || undefined
-        })
-      });
-      const result = await res.json();
-      alert(`Xóa thành công! Số dòng đã xóa: ${result.deleted_rows}, Còn lại: ${result.remaining_rows}`);
-      loadDwHealth();
-      // Tự động chạy ETL sau khi xóa dữ liệu
-      runEtlSilently();
-    } catch { alert('Lỗi! Vui lòng kiểm tra lại Backup.'); }
-  };
-
-  const currentSchema = schemas[selectedTable];
 
   // ── Render helpers ─────────────────────────────────────────
 
@@ -366,8 +339,7 @@ function DataManagementContent() {
   // Tab config
   const tabs: { key: TabKey; label: string; icon: React.ReactNode }[] = [
     { key: 'overview', label: 'Tổng quan DW', icon: <Activity size={16} /> },
-    { key: 'csv', label: 'Nạp CSV', icon: <FileSpreadsheet size={16} /> },
-    { key: 'schema', label: 'Schema & Xóa dữ liệu', icon: <Eye size={16} /> },
+    { key: 'csv', label: 'Nạp CSV/Excel', icon: <FileSpreadsheet size={16} /> },
   ];
 
   return (
@@ -516,10 +488,90 @@ function DataManagementContent() {
               <FileSpreadsheet className="text-orange-500" /> Nạp File CSV/Excel vào Data Warehouse
             </h2>
             <p className="text-sm text-slate-500 mb-4">
-              Upload file CSV hoặc Excel, xem trước dữ liệu, mapping cột sang bảng DW, rồi nạp vào Data Warehouse.
-              Dữ liệu sẽ tự động deduplicate theo Primary Key (UPSERT).
-              Sau khi nạp xong, hệ thống sẽ tự động cập nhật bảng tổng hợp (ETL Pipeline).
+              Upload file CSV hoặc Excel, mapping cột và nạp vào bất kỳ bảng DIM hoặc FACT nào.
+              <b> Bảng DIM</b>: chỉ thêm mới (bỏ qua đối tượng đã tồn tại theo PK, hiển thị danh sách bỏ qua).
+              <b> Bảng FACT</b>: UPSERT, tự động giải quyết xung đột PK.
+              Sau khi nạp, dữ liệu real-time hôm nay sẽ được cập nhật ngay.
             </p>
+
+            {/* ── Export Template Block ─────────────────────────────── */}
+            <div className="mb-6 p-4 bg-indigo-50 border border-indigo-200 rounded-xl">
+              <h3 className="text-sm font-semibold text-indigo-800 mb-3 flex items-center gap-2">
+                <FileDown size={16} /> Xuất file cấu trúc bảng (Template)
+              </h3>
+              <p className="text-xs text-indigo-600 mb-3">
+                Tải file mẫu với cấu trúc cột đầy đủ (tên, kiểu dữ liệu, nullable...) để chuẩn bị dữ liệu nhập vào đúng định dạng.
+              </p>
+              <div className="flex flex-wrap gap-3 items-end">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="block text-xs font-medium text-indigo-700 mb-1">Chọn bảng</label>
+                  <select
+                    value={exportTable}
+                    onChange={e => setExportTable(e.target.value)}
+                    className="w-full px-3 py-2 border border-indigo-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  >
+                    <option value="">-- Chọn bảng DIM / FACT --</option>
+                    <optgroup label="─── FACT Tables ───">
+                      {dimFactTables
+                        .filter(t => t.table_name.toLowerCase().startsWith('fact'))
+                        .map(t => (
+                          <option key={t.table_name} value={t.table_name}>
+                            {t.table_name}{t.row_count > 0 ? ` (${new Intl.NumberFormat('vi-VN').format(t.row_count)} rows)` : ''}
+                          </option>
+                        ))}
+                    </optgroup>
+                    <optgroup label="─── DIM Tables ───">
+                      {dimFactTables
+                        .filter(t => t.table_name.toLowerCase().startsWith('dim'))
+                        .map(t => (
+                          <option key={t.table_name} value={t.table_name}>
+                            {t.table_name}{t.row_count > 0 ? ` (${new Intl.NumberFormat('vi-VN').format(t.row_count)} rows)` : ''}
+                          </option>
+                        ))}
+                    </optgroup>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-indigo-700 mb-1">Định dạng</label>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setExportFormat('excel')}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                        exportFormat === 'excel'
+                          ? 'bg-indigo-600 text-white border-indigo-600'
+                          : 'bg-white text-indigo-700 border-indigo-300 hover:bg-indigo-50'
+                      }`}
+                    >
+                      Excel (.xlsx)
+                    </button>
+                    <button
+                      onClick={() => setExportFormat('csv')}
+                      className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                        exportFormat === 'csv'
+                          ? 'bg-indigo-600 text-white border-indigo-600'
+                          : 'bg-white text-indigo-700 border-indigo-300 hover:bg-indigo-50'
+                      }`}
+                    >
+                      CSV (.csv)
+                    </button>
+                  </div>
+                </div>
+                <button
+                  onClick={handleExportTemplate}
+                  disabled={!exportTable || exportLoading}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-colors ${
+                    !exportTable || exportLoading
+                      ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                      : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                  }`}
+                >
+                  {exportLoading
+                    ? <><RefreshCw size={15} className="animate-spin" /> Đang xuất...</>
+                    : <><Download size={15} /> Tải xuống template</>
+                  }
+                </button>
+              </div>
+            </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Upload area */}
@@ -653,144 +705,7 @@ function DataManagementContent() {
           </div>
         )}
 
-        {/* ══════ TAB: Schema & Purge ═══════════════════════ */}
-        {activeTab === 'schema' && (
-          <div className="space-y-6">
-            {/* Table Selector */}
-            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex items-end gap-4">
-              <div className="flex-1">
-                <label className="block text-sm font-semibold text-slate-700 mb-2">Chọn Bảng Dữ Liệu (Table)</label>
-                <select
-                  value={selectedTable}
-                  onChange={(e) => setSelectedTable(e.target.value)}
-                  className="w-full px-4 py-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-indigo-500 outline-none"
-                >
-                  {Object.entries(schemas).map(([key, val]: any) => (
-                    <option key={key} value={key}>{val.display_name} ({key})</option>
-                  ))}
-                </select>
-              </div>
-              <button
-                onClick={() => window.open(`${DM_API}/template/${selectedTable}`)}
-                className="flex items-center gap-2 px-6 py-2 bg-slate-800 text-white font-medium rounded-lg hover:bg-slate-900 transition-colors"
-              >
-                <Download size={18} /> Tải Template
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Purge */}
-              <div className="bg-white p-6 rounded-xl border border-red-100 shadow-sm relative overflow-hidden">
-                <div className="absolute top-0 right-0 w-32 h-32 bg-red-50 rounded-bl-full -z-0"></div>
-                <h2 className="text-lg font-bold text-red-700 mb-4 flex items-center gap-2 relative z-10">
-                  <Trash2 /> Xóa Dữ Liệu (Smart Purge)
-                </h2>
-                <div className="text-sm text-slate-600 mb-4 relative z-10 p-3 bg-red-50 border border-red-100 rounded-lg flex gap-3">
-                  <AlertCircle className="text-red-500 flex-shrink-0" size={20} />
-                  <div>Dữ liệu sẽ được <b>Backup</b> trước khi purge. Chỉ hỗ trợ: <b>FactSales</b> và <b>FactOnlineSales</b> theo khoảng ngày.</div>
-                </div>
-
-                <div className="space-y-4 relative z-10">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Từ ngày</label>
-                      <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full px-3 py-2 border rounded-md" />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Đến ngày</label>
-                      <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full px-3 py-2 border rounded-md" />
-                    </div>
-                  </div>
-                  <button onClick={handlePurge} className="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg">
-                    <Trash2 size={18} className="inline mr-2" /> Xác Nhận Xóa Dữ Liệu
-                  </button>
-                </div>
-              </div>
-
-              {/* Schema Editor */}
-              <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                    <Eye className="text-emerald-500" /> Schema Editor
-                  </h2>
-                  <div>
-                    {!isEditingSchema ? (
-                      <button onClick={() => setIsEditingSchema(true)} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg text-sm">
-                        Chỉnh sửa
-                      </button>
-                    ) : (
-                      <button onClick={handleSaveSchema} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg text-sm">
-                        Lưu Thay Đổi
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {!currentSchema ? (
-                  <p className="text-slate-500 text-sm text-center py-6">Chọn bảng để xem schema</p>
-                ) : (
-                  <>
-                    <div className="mb-4 p-3 bg-slate-50 border border-slate-200 rounded-lg">
-                      <label className="block text-xs font-medium text-slate-500 mb-1">Tên Hiển Thị</label>
-                      <input
-                        type="text"
-                        value={currentSchema.display_name || ''}
-                        onChange={e => handleUpdateTableMeta('display_name', e.target.value)}
-                        disabled={!isEditingSchema}
-                        className={`w-full px-3 py-1.5 border rounded-md text-sm ${!isEditingSchema ? 'bg-slate-100 text-slate-500' : ''}`}
-                      />
-                    </div>
-
-                    <div className="overflow-x-auto max-h-80 rounded-lg border border-slate-200">
-                      <table className="w-full text-left text-xs text-slate-600">
-                        <thead className="bg-slate-100 text-slate-800 font-medium sticky top-0">
-                          <tr>
-                            <th className="px-3 py-2 border-b">Cột</th>
-                            <th className="px-3 py-2 border-b">Kiểu</th>
-                            <th className="px-3 py-2 border-b">Ghi Chú</th>
-                            <th className="px-3 py-2 border-b w-16 text-center">TT</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {(currentSchema?.columns || []).map((col: any, idx: number) => (
-                            <tr key={col.name + idx} className={`hover:bg-slate-50 ${col.is_hidden ? 'opacity-50' : ''}`}>
-                              <td className="px-3 py-2 font-medium text-indigo-600">
-                                <input
-                                  type="text" value={col.name || ''}
-                                  onChange={e => handleUpdateColumnMeta(idx, 'name', e.target.value)}
-                                  disabled={!isEditingSchema}
-                                  className={`w-full px-1 py-0.5 border rounded text-xs ${isEditingSchema ? '' : 'bg-transparent border-transparent'}`}
-                                />
-                              </td>
-                              <td className="px-3 py-2"><code className="bg-slate-100 px-1 py-0.5 rounded text-xs">{col.type}</code></td>
-                              <td className="px-3 py-2">
-                                <input
-                                  type="text" value={col.description || ''}
-                                  onChange={e => handleUpdateColumnMeta(idx, 'description', e.target.value)}
-                                  disabled={!isEditingSchema}
-                                  className={`w-full px-1 py-0.5 border rounded text-xs ${isEditingSchema ? '' : 'bg-transparent border-transparent'}`}
-                                />
-                              </td>
-                              <td className="px-3 py-2 text-center">
-                                <button
-                                  onClick={() => handleUpdateColumnMeta(idx, 'is_hidden', !col.is_hidden)}
-                                  disabled={!isEditingSchema}
-                                  className={`text-xs px-1.5 py-0.5 border rounded ${col.is_hidden ? 'bg-slate-200 text-slate-600' : 'bg-green-100 text-green-700'}`}
-                                >
-                                  {col.is_hidden ? 'Ẩn' : 'On'}
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
+        {/* Schema & Purge tab removed */}
 
       </div>
     </DashboardLayout>

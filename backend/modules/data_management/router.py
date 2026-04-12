@@ -168,57 +168,6 @@ def _upsert_agg_store_monthly_sales_from_factsales(conn, sales_wm: int) -> None:
     logger.info(f"agg_store_monthly_sales updated (incremental, wm={sales_wm})")
 
 
-def _refresh_summary_for_purge(table_name: str, start_date: str = None, end_date: str = None) -> None:
-    """After purge, rebuild summary_daily_sales for affected date range and refresh cache."""
-    if table_name not in ("FactSales", "FactOnlineSales"):
-        # Purge on dim tables doesn't affect summary
-        return
-    engine = get_engine()
-    with engine.begin() as conn:
-        # Delete affected summary rows for the date range
-        conditions = ["1=1"]
-        params: Dict[str, Any] = {}
-        if start_date:
-            conditions.append("DateKey >= :sd")
-            params["sd"] = start_date
-        if end_date:
-            conditions.append("DateKey <= :ed")
-            params["ed"] = end_date
-        where = " AND ".join(conditions)
-        conn.execute(text(f"DELETE FROM summary_daily_sales WHERE {where}"), params)
-
-        # Re-aggregate from the source fact table for the affected range
-        date_filter = ""
-        if start_date or end_date:
-            parts = []
-            if start_date:
-                parts.append("DATE(DateKey) >= :sd")
-            if end_date:
-                parts.append("DATE(DateKey) <= :ed")
-            date_filter = "WHERE " + " AND ".join(parts)
-
-        conn.execute(text(f"""
-            REPLACE INTO summary_daily_sales
-                (DateKey, StoreKey, ProductKey, PromotionKey,
-                 total_sales_quantity, total_sales_amount,
-                 total_return_amount, total_discount_amount, total_cost)
-            SELECT
-                DATE(DateKey), COALESCE(StoreKey,0), ProductKey,
-                COALESCE(PromotionKey,0),
-                SUM(SalesQuantity), SUM(SalesAmount),
-                SUM(COALESCE(ReturnAmount,0)), SUM(COALESCE(DiscountAmount,0)),
-                SUM(COALESCE(TotalCost,0))
-            FROM v_total_sales
-            {date_filter}
-            GROUP BY DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0)
-        """), params)
-    logger.info(f"summary_daily_sales rebuilt for purge on {table_name}")
-    from modules.sale_profit.service import refresh_sales_profit_cache, clear_all_caches
-    clear_all_caches()
-    refresh_sales_profit_cache()
-    logger.info("Parquet cache refreshed after purge")
-
-
 logger.info("Data Management startup ready.")
 
 
@@ -288,9 +237,26 @@ def _sanitize_df(df: pd.DataFrame) -> pd.DataFrame:
 # Maps table_name → single surrogate PK column name.
 # These keys have NO business meaning — they are generated IDs only.
 FACT_SURROGATE_PKS: Dict[str, str] = {
-    "FactSales": "SalesKey",
+    "FactSales":       "SalesKey",
     "FactOnlineSales": "OnlineSalesKey",
-    "FactInventory": "InventoryKey",
+    "FactInventory":   "InventoryKey",
+    "FactExchangeRate": "ExchangeRateKey",
+    "FactSalesQuota":  "SalesQuotaKey",
+}
+
+# ── Dimension tables: INSERT-only, skip duplicates by PK ─────────────────────
+DIM_TABLE_PKS: Dict[str, str] = {
+    "DimProduct":            "ProductKey",
+    "DimStore":              "StoreKey",
+    "DimEmployee":           "EmployeeKey",
+    "DimCustomer":           "CustomerKey",
+    "DimChannel":            "ChannelKey",
+    "DimPromotion":          "PromotionKey",
+    "DimCurrency":           "CurrencyKey",
+    "DimGeography":          "GeographyKey",
+    "DimProductCategory":    "ProductCategoryKey",
+    "DimProductSubcategory": "ProductSubcategoryKey",
+    "DimDate":               "DateKey",
 }
 
 
@@ -521,22 +487,28 @@ async def ingest_data(table_name: str = Form(...), file: UploadFile = File(...))
         else:
             pk_actions[surrogate_pk] = "conflicts resolved with new sequential IDs"
 
+    elif table_name in DIM_TABLE_PKS:
+        # ── DIM tables: INSERT-only, skip if PK already exists ───
+        pk_col = DIM_TABLE_PKS[table_name]
+        if pk_col not in new_df.columns:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Thiếu cột khóa chính '{pk_col}'. Bảng DIM yêu cầu PK do người dùng cung cấp.",
+            )
+        # PK null rows are rejected
+        if new_df[pk_col].isnull().any():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cột khóa chính '{pk_col}' có giá trị NULL.",
+            )
+
     else:
-        # ── Dim / other tables: validate PK exists and is not null ──
+        # ── Other tables: validate PKs ─────────────────────────
         missing_pks = [pk for pk in primary_keys if pk not in new_df.columns]
         if missing_pks:
             raise HTTPException(
                 status_code=400,
-                detail=f"Thiếu cột khóa chính: {missing_pks}. Bảng Dim yêu cầu PK do người dùng cung cấp.",
-            )
-        pk_null_cols = [
-            pk for pk in primary_keys
-            if pk in new_df.columns and new_df[pk].isnull().any()
-        ]
-        if pk_null_cols:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cột khóa chính có giá trị NULL: {pk_null_cols}.",
+                detail=f"Thiếu cột khóa chính: {missing_pks}.",
             )
 
     # ── Warn about missing non-key columns ───────────────────────
@@ -559,24 +531,36 @@ async def ingest_data(table_name: str = Form(...), file: UploadFile = File(...))
             db_df = db_df.drop_duplicates(subset=primary_in_df, keep="last")
 
     rows = db_df.to_dict(orient="records")
-    affected_rows = _bulk_upsert(table_name, rows, primary_keys)
 
+    # ── DIM tables: INSERT-only with duplicate-skip reporting ────
+    if table_name in DIM_TABLE_PKS:
+        pk_col = DIM_TABLE_PKS[table_name]
+        dim_result = _dim_insert_skip_duplicates(table_name, pk_col, rows)
+        threading.Thread(target=_post_ingest_refresh, daemon=True).start()
+        return {
+            "message": (
+                f"Ingest DIM '{table_name}': "
+                f"{dim_result['inserted']} dòng được thêm mới, "
+                f"{len(dim_result['skipped_ids'])} dòng bỏ qua (PK đã tồn tại)."
+            ),
+            "rows_inserted": dim_result["inserted"],
+            "skipped_duplicate_ids": dim_result["skipped_ids"],
+            "pk_auto_actions": {},
+            "missing_columns_skipped": missing_non_pk if missing_non_pk else [],
+        }
+
+    # ── FACT and other tables: UPSERT ────────────────────────────
+    affected_rows = _bulk_upsert(table_name, rows, primary_keys)
+    threading.Thread(target=_post_ingest_refresh, daemon=True).start()
     return {
         "message": f"Ingested into MySQL table '{table_name}'. Affected rows: {affected_rows}",
         "pk_auto_actions": pk_actions,
         "missing_columns_skipped": missing_non_pk if missing_non_pk else [],
     }
 
-ALLOWED_TABLES = {
-    "FactSales", "FactOnlineSales", "FactInventory",
-    "DimProduct", "DimStore", "DimEmployee", "DimChannel",
-    "DimPromotion", "DimCurrency", "DimCustomer",
-    "DimDate", "DimGeography", "DimProductCategory",
-    "DimProductSubcategory", "summary_daily_sales",
-}
-
-# Only these tables support DATE_RANGE purge
-PURGEABLE_TABLES = {"FactSales", "FactOnlineSales"}
+ALLOWED_TABLES = (
+    set(FACT_SURROGATE_PKS.keys()) | set(DIM_TABLE_PKS.keys()) | {"summary_daily_sales"}
+)
 
 
 def _validate_table_name(table_name: str) -> str:
@@ -585,62 +569,73 @@ def _validate_table_name(table_name: str) -> str:
         raise HTTPException(status_code=400, detail=f"Table '{table_name}' is not allowed")
     return table_name
 
+def _dim_insert_skip_duplicates(
+    table_name: str, pk_col: str, rows: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Insert DIM rows, skipping any whose pk_col already exists in DB.
+    Returns dict: {inserted, skipped_ids}.
+    """
+    if not rows:
+        return {"inserted": 0, "skipped_ids": []}
 
-class PurgeRequest(BaseModel):
-    table_name: str
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    category: Optional[str] = None
-
-@router.post("/purge")
-def purge_data(request: PurgeRequest):
-    schemas = load_schema()
-    table_name = _validate_table_name(request.table_name)
-    if table_name not in schemas:
-        raise HTTPException(status_code=404, detail="Table schema not found")
-        
-    if table_name not in PURGEABLE_TABLES:
-        raise HTTPException(status_code=400, detail=f"Table '{table_name}' does not support purge. Only FactSales and FactOnlineSales are allowed.")
-
-    schema = schemas[table_name]
-    backup_table = f"backup_{table_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    conditions = ["1=1"]
-    params: Dict[str, Any] = {}
-
-    if not request.start_date or not request.end_date:
-        raise HTTPException(status_code=400, detail="start_date and end_date are required for DATE_RANGE purge.")
-
-    conditions.append("DateKey >= :start_date")
-    params["start_date"] = request.start_date
-    conditions.append("DateKey <= :end_date")
-    params["end_date"] = request.end_date
-
-    where_clause = " AND ".join(conditions)
     engine = get_engine()
 
-    with engine.begin() as conn:
-        total_before = conn.execute(text(f"SELECT COUNT(*) AS c FROM {table_name}")).scalar() or 0
+    # Normalize PK values — pandas may produce floats like 1001.0
+    def _norm(v):
+        if v is None:
+            return None
+        try:
+            return int(float(v))
+        except (ValueError, TypeError):
+            return v
 
-        conn.execute(text(f"CREATE TABLE {backup_table} AS SELECT * FROM {table_name} WHERE {where_clause}"), params)
-        conn.execute(text(f"DELETE FROM {table_name} WHERE {where_clause}"), params)
+    incoming_pks = [_norm(r.get(pk_col)) for r in rows]
+    valid_pks = [p for p in incoming_pks if p is not None]
 
-        total_after = conn.execute(text(f"SELECT COUNT(*) AS c FROM {table_name}")).scalar() or 0
+    existing_set: set = set()
+    if valid_pks:
+        chunk_size = 500
+        try:
+            with engine.connect() as conn:
+                for i in range(0, len(valid_pks), chunk_size):
+                    chunk = valid_pks[i: i + chunk_size]
+                    existing_set.update(
+                        int(v) for v in conn.execute(
+                            text(f"SELECT `{pk_col}` FROM `{table_name}` WHERE `{pk_col}` IN :ids"),
+                            {"ids": tuple(chunk)},
+                        ).scalars()
+                    )
+        except Exception as ex:
+            logger.warning("[%s] could not fetch existing PKs: %s", table_name, ex)
 
-    deleted = int(total_before - total_after)
-    # Refresh summary + cache in background if fact table data changed
-    if deleted > 0 and table_name in ("FactSales", "FactOnlineSales"):
-        threading.Thread(
-            target=_refresh_summary_for_purge,
-            args=(table_name, request.start_date, request.end_date),
-            daemon=True,
-        ).start()
+    to_insert: List[Dict[str, Any]] = []
+    skipped_ids: List[Any] = []
+    for row, pk_val in zip(rows, incoming_pks):
+        if pk_val is not None and pk_val in existing_set:
+            skipped_ids.append(pk_val)
+        else:
+            to_insert.append(row)
 
-    return {
-        "message": "Data purged successfully",
-        "backup_table": backup_table,
-        "deleted_rows": deleted,
-        "remaining_rows": int(total_after),
-    }
+    inserted = 0
+    if to_insert:
+        columns = list(to_insert[0].keys())
+        col_str = ", ".join(f"`{c}`" for c in columns)
+        place_str = ", ".join(f":{c}" for c in columns)
+        sql = f"INSERT IGNORE INTO `{table_name}` ({col_str}) VALUES ({place_str})"
+        with engine.begin() as conn:
+            result = conn.execute(text(sql), to_insert)
+            inserted = max(0, int(result.rowcount or len(to_insert)))
+
+    return {"inserted": inserted, "skipped_ids": skipped_ids}
+
+
+def _post_ingest_refresh() -> None:
+    """Background: fast-refresh KPIs + realtime snapshot after any data ingest."""
+    try:
+        etl_fast_refresh()
+    except Exception as exc:
+        logger.warning("post-ingest fast-refresh failed: %s", exc)
+
 
 @router.get("/categories/{table_name}")
 def get_categories(table_name: str):
@@ -808,11 +803,11 @@ async def csv_upload_preview(file: UploadFile = File(...)):
     if df.empty:
         raise HTTPException(status_code=400, detail="File is empty")
 
-    # Get DW table columns for mapping suggestions
+    # Get DW table columns for mapping suggestions (all allowed DIM + FACT)
     engine = get_engine()
     dw_tables = {}
     with engine.connect() as conn:
-        target_tables = ["FactSales", "FactOnlineSales", "DimProduct", "DimCustomer", "DimStore"]
+        target_tables = sorted(FACT_SURROGATE_PKS.keys()) + sorted(DIM_TABLE_PKS.keys())
         for tbl in target_tables:
             cols = conn.execute(text(
                 "SELECT column_name AS column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = :t ORDER BY ordinal_position"
@@ -879,6 +874,29 @@ async def csv_transform_load(
 
     rows = df_mapped.to_dict(orient="records")
 
+    # ── DIM tables: INSERT-only with duplicate-skip reporting ────
+    if target_table in DIM_TABLE_PKS:
+        pk_col = DIM_TABLE_PKS[target_table]
+        if pk_col not in df_mapped.columns:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Thiếu cột khóa chính '{pk_col}' trong dữ liệu đã mapping.",
+            )
+        try:
+            dim_result = _dim_insert_skip_duplicates(target_table, pk_col, rows)
+        except Exception as exc:
+            logger.error(f"[csv-transform-load] DIM upsert error for {target_table}: {exc}")
+            raise HTTPException(status_code=400, detail=f"Bảng '{target_table}': {_parse_db_error(exc)}")
+        threading.Thread(target=_post_ingest_refresh, daemon=True).start()
+        return serialize_payload({
+            "status": "success",
+            "target_table": target_table,
+            "rows_processed": len(rows),
+            "rows_affected": dim_result["inserted"],
+            "skipped_duplicate_ids": dim_result["skipped_ids"],
+            "columns_mapped": list(mapping.keys()),
+        })
+
     # ── Wrap DB write so errors return 400 with detail, not 500 ──
     try:
         affected = _bulk_upsert(target_table, rows, primary_keys)
@@ -889,18 +907,151 @@ async def csv_transform_load(
             detail=f"Bảng '{target_table}': {_parse_db_error(exc)}"
         )
 
+    threading.Thread(target=_post_ingest_refresh, daemon=True).start()
     return serialize_payload({
         "status": "success",
         "target_table": target_table,
         "rows_processed": len(rows),
         "rows_affected": affected,
+        "skipped_duplicate_ids": [],
         "columns_mapped": list(mapping.keys()),
     })
 
 
 # ═══════════════════════════════════════════════════════════════
-# ETL Pipeline Control
+# Export table structure template (CSV / Excel)
 # ═══════════════════════════════════════════════════════════════
+
+@router.get("/table-structure-template")
+def table_structure_template(table_name: str, format: str = "csv"):
+    """
+    Xuất file CSV hoặc Excel chứa cấu trúc cột (column name + data type + nullable)
+    của bảng được chọn. Chỉ cho phép bảng DIM và FACT.
+    """
+    engine = get_engine()
+    with engine.connect() as conn:
+        # Validate: bảng phải tồn tại và là DIM/FACT
+        exists = conn.execute(text("""
+            SELECT COUNT(*) FROM information_schema.tables
+            WHERE table_schema = DATABASE() AND LOWER(table_name) = :t
+        """), {"t": table_name.lower()}).scalar()
+        if not exists:
+            raise HTTPException(status_code=404, detail=f"Bảng '{table_name}' không tồn tại")
+
+        lower_name = table_name.lower()
+        if not (lower_name.startswith("fact") or lower_name.startswith("dim")):
+            raise HTTPException(status_code=400, detail="Chỉ xuất template cho bảng DIM và FACT")
+
+        cols = conn.execute(text("""
+            SELECT
+                column_name    AS `column_name`,
+                data_type      AS `data_type`,
+                character_maximum_length AS `max_length`,
+                numeric_precision        AS `precision`,
+                numeric_scale            AS `scale`,
+                is_nullable    AS `is_nullable`,
+                column_default AS `default_value`,
+                column_comment AS `description`
+            FROM information_schema.columns
+            WHERE table_schema = DATABASE() AND LOWER(table_name) = :t
+            ORDER BY ordinal_position
+        """), {"t": table_name.lower()}).mappings().all()
+
+    if not cols:
+        raise HTTPException(status_code=404, detail=f"Không tìm thấy cột nào trong bảng '{table_name}'")
+
+    # Build dataframe: header row = column names, row 1 = sample types, row 2+ = type hints
+    col_names      = [r["column_name"]   for r in cols]
+    col_types      = [r["data_type"]     for r in cols]
+    col_nullable   = [r["is_nullable"]   for r in cols]
+    col_default    = [str(r["default_value"]) if r["default_value"] is not None else "" for r in cols]
+    col_desc       = [r["description"] or "" for r in cols]
+
+    # Build size hint string
+    def _size_hint(r):
+        if r["max_length"]:
+            return f"max {r['max_length']} chars"
+        if r["precision"] is not None and r["scale"] is not None:
+            return f"({r['precision']},{r['scale']})"
+        if r["precision"] is not None:
+            return f"precision {r['precision']}"
+        return ""
+
+    col_size = [_size_hint(r) for r in cols]
+
+    # Meta dataframe: info rows (grayed out in reader)
+    meta_df = pd.DataFrame({
+        "# Thông tin cột": col_names,
+        "Kiểu dữ liệu":    col_types,
+        "Kích thước":       col_size,
+        "Cho phép NULL":    col_nullable,
+        "Giá trị mặc định": col_default,
+        "Mô tả":            col_desc,
+    })
+
+    # Empty data template: just the column headers as one empty row
+    data_df = pd.DataFrame(columns=col_names)
+    data_df.loc[0] = ["" for _ in col_names]  # 1 empty row as example
+
+    safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", table_name)
+    filename  = f"template_{safe_name}"
+
+    if format.lower() == "excel":
+        buf = _io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            # Sheet 1: cấu trúc cột
+            meta_df.to_excel(writer, sheet_name="Cấu trúc cột", index=False)
+            # Sheet 2: template nhập liệu (chỉ headers + 1 dòng trống)
+            data_df.to_excel(writer, sheet_name="Template nhập liệu", index=False)
+            # Auto-width columns sheet 2
+            ws = writer.sheets["Template nhập liệu"]
+            for col_cells in ws.columns:
+                max_len = max(len(str(cell.value or "")) for cell in col_cells)
+                ws.column_dimensions[col_cells[0].column_letter].width = min(max_len + 4, 40)
+        buf.seek(0)
+        return StreamingResponse(
+            buf,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}.xlsx"'},
+        )
+    else:
+        # CSV: 2-section file — metadata block + empty data template
+        lines = []
+        lines.append("# === CẤU TRÚC BẢNG: " + table_name + " ===")
+        lines.append("# Cột,Kiểu,Kích thước,Nullable,Mặc định,Mô tả")
+        for r, sz in zip(cols, col_size):
+            lines.append(
+                f"# {r['column_name']},{r['data_type']},{sz},{r['is_nullable']},"
+                f"{r['default_value'] or ''},{r['description'] or ''}"
+            )
+        lines.append("# === TEMPLATE NHẬP LIỆU (xóa các dòng # ở trên trước khi nạp) ===")
+        lines.append(",".join(col_names))
+        lines.append(",".join("" for _ in col_names))  # 1 empty data row
+        csv_content = "\n".join(lines) + "\n"
+
+        return StreamingResponse(
+            _io.StringIO(csv_content),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}.csv"'},
+        )
+
+
+@router.get("/dim-fact-tables")
+def list_dim_fact_tables():
+    """Trả về danh sách tên tất cả bảng DIM và FACT trong database."""
+    engine = get_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT table_name AS table_name, table_rows AS table_rows
+            FROM information_schema.tables
+            WHERE table_schema = DATABASE()
+              AND (LOWER(table_name) LIKE 'dim%' OR LOWER(table_name) LIKE 'fact%')
+            ORDER BY table_name
+        """)).mappings().all()
+    return serialize_payload([
+        {"table_name": r["table_name"], "row_count": int(r["table_rows"] or 0)}
+        for r in rows
+    ])
 
 _ETL_STATUS: Dict[str, Any] = {
     "running": False,
@@ -990,8 +1141,12 @@ def etl_fast_refresh():
             wm_online = conn.execute(text(
                 "SELECT COALESCE((SELECT last_key FROM _summary_watermarks WHERE source_table='FactOnlineSales'),0)"
             )).scalar() or 0
-            max_sales  = conn.execute(text("SELECT COALESCE(MAX(SalesKey),0) FROM FactSales")).scalar() or 0
-            max_online = conn.execute(text("SELECT COALESCE(MAX(OnlineSalesKey),0) FROM FactOnlineSales")).scalar() or 0
+            wm_inventory = conn.execute(text(
+                "SELECT COALESCE((SELECT last_key FROM _summary_watermarks WHERE source_table='FactInventory'),0)"
+            )).scalar() or 0
+            max_sales     = conn.execute(text("SELECT COALESCE(MAX(SalesKey),0) FROM FactSales")).scalar() or 0
+            max_online    = conn.execute(text("SELECT COALESCE(MAX(OnlineSalesKey),0) FROM FactOnlineSales")).scalar() or 0
+            max_inventory = conn.execute(text("SELECT COALESCE(MAX(InventoryKey),0) FROM FactInventory")).scalar() or 0
 
             # Delta stats from new FactSales rows (chỉ rows mới → rất nhanh)
             delta_sales = conn.execute(text("""
@@ -1049,6 +1204,13 @@ def etl_fast_refresh():
                     ON DUPLICATE KEY UPDATE last_key = :v
                 """), {"v": int(max_online)})
 
+            # Cập nhật watermark FactInventory (không cần thay đổi summary_daily_sales)
+            if int(max_inventory) > int(wm_inventory):
+                conn.execute(text("""
+                    INSERT INTO _summary_watermarks (source_table, last_key) VALUES ('FactInventory', :v)
+                    ON DUPLICATE KEY UPDATE last_key = :v
+                """), {"v": int(max_inventory)})
+
         # ── Bước 2: Incremental update agg_kpi_summary ─────────────
         # Dùng delta từ rows mới thay vì scan toàn bộ v_total_sales
         total_delta_cnt  = int(delta_sales["delta_cnt"])  + int(delta_online["delta_cnt"])
@@ -1087,17 +1249,259 @@ def etl_fast_refresh():
                     "margin": (new_amt - new_cost) / new_amt * 100 if new_amt else 0,
                 })
 
-        # ── Bước 3: Clear in-memory TTL cache ──────────────────────
-        from modules.sale_profit.service import clear_all_caches, refresh_sales_profit_cache
-        clear_all_caches()
-
-        # ── Bước 4 & 5: Background tasks (không block response) ────
-        threading.Thread(target=refresh_sales_profit_cache, daemon=True).start()
+        # ── Bước 3: Clear sale_profit + employee_performance cache ────
+        # Analytics cache (agg tables) sẽ được clear SAU KHI background rebuild hoàn tất
+        from modules.sale_profit.service import clear_all_caches as _sp_clear, refresh_sales_profit_cache
+        _sp_clear()
         try:
-            from modules.realtime.router import _poll_dw_once
-            threading.Thread(target=_poll_dw_once, daemon=True).start()
+            from modules.employee_performance.service import clear_all_caches as _ep_clear
+            _ep_clear()
         except Exception:
             pass
+
+        # ── Bước 4 & 5: Background tasks (không block response) ────
+        # Capture watermark values cho closure
+        _wm_sales      = int(wm_sales)
+        _wm_online     = int(wm_online)
+        _wm_inventory  = int(wm_inventory)
+        _max_sales     = int(max_sales)
+        _max_online    = int(max_online)
+        _max_inventory = int(max_inventory)
+
+        def _bg_refresh():
+            # 4a. Rebuild sale_profit parquet snapshot
+            try:
+                refresh_sales_profit_cache()
+            except Exception as _e:
+                logger.warning("bg refresh_sales_profit_cache failed: %s", _e)
+
+            # 4b. Incremental update agg_inventory_metrics
+            #     Chỉ tính lại các combo (product, store, month) bị ảnh hưởng bởi rows mới
+            if _max_sales > _wm_sales or _max_inventory > _wm_inventory:
+                _tmp_tables = ("_tmp_fr_new_combos", "_tmp_fr_inv_agg", "_tmp_fr_sales_agg")
+                try:
+                    with engine.begin() as _c:
+                        for _t in _tmp_tables:
+                            _c.execute(text(f"DROP TABLE IF EXISTS {_t}"))
+                    with engine.begin() as _c:
+                        _c.execute(text(f"""
+                            CREATE TABLE _tmp_fr_new_combos AS
+                            SELECT DISTINCT ProductKey, COALESCE(StoreKey,0) AS StoreKey,
+                                CONCAT(YEAR(DateKey),'-',LPAD(MONTH(DateKey),2,'0')) AS ym
+                            FROM FactSales WHERE SalesKey > {_wm_sales}
+                            UNION
+                            SELECT DISTINCT ProductKey, COALESCE(StoreKey,0) AS StoreKey,
+                                CONCAT(YEAR(DateKey),'-',LPAD(MONTH(DateKey),2,'0')) AS ym
+                            FROM FactInventory WHERE InventoryKey > {_wm_inventory}
+                        """))
+                        _c.execute(text("""
+                            CREATE TABLE _tmp_fr_inv_agg AS
+                            SELECT fi.ProductKey, fi.StoreKey,
+                                CONCAT(YEAR(fi.DateKey),'-',LPAD(MONTH(fi.DateKey),2,'0')) AS ym,
+                                AVG(fi.OnHandQuantity)              AS avg_on_hand,
+                                AVG(fi.OnHandQuantity * fi.UnitCost) AS avg_inv_cost
+                            FROM FactInventory fi
+                            JOIN _tmp_fr_new_combos nc
+                              ON nc.ProductKey = fi.ProductKey AND nc.StoreKey = fi.StoreKey
+                             AND nc.ym = CONCAT(YEAR(fi.DateKey),'-',LPAD(MONTH(fi.DateKey),2,'0'))
+                            GROUP BY fi.ProductKey, fi.StoreKey,
+                                     CONCAT(YEAR(fi.DateKey),'-',LPAD(MONTH(fi.DateKey),2,'0'))
+                        """))
+                        _c.execute(text("""
+                            CREATE TABLE _tmp_fr_sales_agg AS
+                            SELECT fs.ProductKey, fs.StoreKey,
+                                CONCAT(YEAR(fs.DateKey),'-',LPAD(MONTH(fs.DateKey),2,'0')) AS ym,
+                                SUM(fs.SalesQuantity) AS total_qty,
+                                SUM(fs.TotalCost)     AS total_cost,
+                                SUM(fs.SalesAmount)   AS total_revenue,
+                                SUM(fs.SalesQuantity) / NULLIF(COUNT(DISTINCT DATE(fs.DateKey)),0) AS daily_avg_sold
+                            FROM FactSales fs
+                            JOIN _tmp_fr_new_combos nc
+                              ON nc.ProductKey = fs.ProductKey AND nc.StoreKey = fs.StoreKey
+                             AND nc.ym = CONCAT(YEAR(fs.DateKey),'-',LPAD(MONTH(fs.DateKey),2,'0'))
+                            GROUP BY fs.ProductKey, fs.StoreKey,
+                                     CONCAT(YEAR(fs.DateKey),'-',LPAD(MONTH(fs.DateKey),2,'0'))
+                        """))
+                        _c.execute(text("""
+                            REPLACE INTO agg_inventory_metrics
+                                (product_key, store_key, period_month,
+                                 avg_on_hand, total_sold, total_cost_sold, total_revenue,
+                                 gross_profit, inventory_turnover, sell_through_rate,
+                                 gmroi, days_of_supply)
+                            SELECT
+                                inv.ProductKey, inv.StoreKey, inv.ym,
+                                inv.avg_on_hand,
+                                COALESCE(s.total_qty, 0),
+                                COALESCE(s.total_cost, 0),
+                                COALESCE(s.total_revenue, 0),
+                                COALESCE(s.total_revenue, 0) - COALESCE(s.total_cost, 0),
+                                CASE WHEN inv.avg_inv_cost > 0
+                                     THEN COALESCE(s.total_cost, 0) / inv.avg_inv_cost ELSE 0 END,
+                                CASE WHEN (COALESCE(s.total_qty,0) + inv.avg_on_hand) > 0
+                                     THEN COALESCE(s.total_qty,0)
+                                          / (COALESCE(s.total_qty,0) + inv.avg_on_hand) ELSE 0 END,
+                                CASE WHEN inv.avg_inv_cost > 0
+                                     THEN (COALESCE(s.total_revenue,0) - COALESCE(s.total_cost,0))
+                                          / inv.avg_inv_cost ELSE 0 END,
+                                CASE WHEN COALESCE(s.daily_avg_sold,0) > 0
+                                     THEN inv.avg_on_hand / s.daily_avg_sold ELSE 0 END
+                            FROM _tmp_fr_inv_agg inv
+                            LEFT JOIN _tmp_fr_sales_agg s
+                              ON s.ProductKey = inv.ProductKey AND s.StoreKey = inv.StoreKey
+                             AND s.ym = inv.ym
+                        """))
+                    with engine.begin() as _c:
+                        for _t in _tmp_tables:
+                            _c.execute(text(f"DROP TABLE IF EXISTS {_t}"))
+                    logger.info("bg agg_inventory_metrics: incremental update done")
+                except Exception as _e:
+                    logger.warning("bg agg_inventory_metrics update failed: %s", _e)
+                    try:
+                        with engine.begin() as _c:
+                            for _t in _tmp_tables:
+                                _c.execute(text(f"DROP TABLE IF EXISTS {_t}"))
+                    except Exception:
+                        pass
+
+            # 4c. Rebuild agg_product_performance (ABC)
+            #     Dùng summary_daily_sales (đã updated ở Bước 1) thay vì v_total_sales 10M rows
+            #     → nhanh (~300ms). Sau đó chạy lại window function RANK()/cumulative_pct
+            #     trên bảng ~2K sản phẩm.
+            try:
+                with engine.begin() as _c:
+                    _c.execute(text("DELETE FROM agg_product_performance"))
+                    _c.execute(text("""
+                        INSERT INTO agg_product_performance
+                            (product_key, product_name, brand_name, category_name, subcategory_name,
+                             total_revenue, total_quantity, total_cost, gross_profit, profit_margin,
+                             revenue_rank, abc_class, cumulative_pct)
+                        SELECT
+                            p.ProductKey, p.ProductName, p.BrandName,
+                            COALESCE(pc.ProductCategoryName, ''),
+                            COALESCE(psc.ProductSubcategoryName, ''),
+                            COALESCE(agg.total_revenue, 0),
+                            COALESCE(agg.total_quantity, 0),
+                            COALESCE(agg.total_cost, 0),
+                            COALESCE(agg.total_revenue, 0) - COALESCE(agg.total_cost, 0),
+                            CASE WHEN COALESCE(agg.total_revenue, 0) > 0
+                                 THEN (COALESCE(agg.total_revenue,0) - COALESCE(agg.total_cost,0))
+                                      / agg.total_revenue
+                                 ELSE 0 END,
+                            RANK() OVER (ORDER BY COALESCE(agg.total_revenue,0) DESC),
+                            'C',
+                            SUM(COALESCE(agg.total_revenue,0))
+                                OVER (ORDER BY COALESCE(agg.total_revenue,0) DESC)
+                                / NULLIF(SUM(COALESCE(agg.total_revenue,0)) OVER (), 0)
+                        FROM (
+                            SELECT sds.ProductKey,
+                                SUM(sds.total_sales_amount
+                                    - COALESCE(sds.total_return_amount, 0)
+                                    - COALESCE(sds.total_discount_amount, 0)) AS total_revenue,
+                                SUM(sds.total_sales_quantity)                 AS total_quantity,
+                                SUM(sds.total_sales_quantity
+                                    * COALESCE(p2.UnitCost, 0))               AS total_cost
+                            FROM summary_daily_sales sds
+                            LEFT JOIN DimProduct p2 ON p2.ProductKey = sds.ProductKey
+                            GROUP BY sds.ProductKey
+                        ) agg
+                        JOIN DimProduct p ON p.ProductKey = agg.ProductKey
+                        LEFT JOIN DimProductSubcategory psc
+                          ON psc.ProductSubcategoryKey = p.ProductSubcategoryKey
+                        LEFT JOIN DimProductCategory pc
+                          ON pc.ProductCategoryKey = psc.ProductCategoryKey
+                    """))
+                    _c.execute(text("""
+                        UPDATE agg_product_performance SET abc_class =
+                            CASE WHEN cumulative_pct <= 0.80 THEN 'A'
+                                 WHEN cumulative_pct <= 0.95 THEN 'B'
+                                 ELSE 'C' END
+                    """))
+                logger.info("bg agg_product_performance: rebuild done (via summary_daily_sales)")
+            except Exception as _e:
+                logger.warning("bg agg_product_performance rebuild failed: %s", _e)
+
+            # 4d. Incremental update agg_customer_rfm
+            #     Bước 1: Update metrics thô của các customers có giao dịch mới
+            #     Bước 2: Chạy lại NTILE(5) trên bảng agg_customer_rfm (~21K rows) — nhanh
+            if _max_online > _wm_online:
+                try:
+                    with engine.begin() as _c:
+                        # Bước 1: Upsert metrics của customers bị ảnh hưởng
+                        _c.execute(text("""
+                            REPLACE INTO agg_customer_rfm
+                                (customer_key, last_order_date, recency_days,
+                                 frequency, monetary, r_score, f_score, m_score, rfm_segment)
+                            SELECT
+                                f.CustomerKey,
+                                MAX(DATE(f.DateKey)),
+                                DATEDIFF(
+                                    (SELECT MAX(DATE(DateKey)) FROM FactOnlineSales),
+                                    MAX(DATE(f.DateKey))
+                                ),
+                                COUNT(DISTINCT f.SalesOrderNumber),
+                                SUM(f.SalesAmount),
+                                1, 1, 1, 'Unknown'
+                            FROM FactOnlineSales f
+                            WHERE f.CustomerKey IN (
+                                SELECT DISTINCT CustomerKey FROM FactOnlineSales
+                                WHERE OnlineSalesKey > :wm AND CustomerKey IS NOT NULL
+                            ) AND f.CustomerKey IS NOT NULL
+                            GROUP BY f.CustomerKey
+                        """), {"wm": _wm_online})
+                        # Bước 2: Rescore toàn bộ bảng bằng NTILE trên ~21K rows (nhanh)
+                        _c.execute(text("DROP TEMPORARY TABLE IF EXISTS _tmp_rfm_scores"))
+                        _c.execute(text("""
+                            CREATE TEMPORARY TABLE _tmp_rfm_scores AS
+                            SELECT customer_key,
+                                NTILE(5) OVER (ORDER BY recency_days ASC) AS r_score,
+                                NTILE(5) OVER (ORDER BY frequency    ASC) AS f_score,
+                                NTILE(5) OVER (ORDER BY monetary     ASC) AS m_score
+                            FROM agg_customer_rfm
+                        """))
+                        _c.execute(text("""
+                            UPDATE agg_customer_rfm a
+                            JOIN _tmp_rfm_scores s ON s.customer_key = a.customer_key
+                            SET a.r_score = s.r_score,
+                                a.f_score = s.f_score,
+                                a.m_score = s.m_score,
+                                a.rfm_segment = CASE
+                                    WHEN s.r_score >= 4 AND s.f_score >= 4 AND s.m_score >= 4 THEN 'Champion'
+                                    WHEN s.r_score >= 3 AND s.f_score >= 3 AND s.m_score >= 3 THEN 'Loyal'
+                                    WHEN s.r_score >= 4 AND s.f_score <= 2                    THEN 'New Customer'
+                                    WHEN s.r_score <= 2 AND s.f_score >= 3 AND s.m_score >= 3 THEN 'At Risk'
+                                    WHEN s.r_score <= 2 AND s.f_score <= 2                    THEN 'Lost'
+                                    WHEN s.r_score >= 3 AND s.m_score >= 3                    THEN 'Potential Loyalist'
+                                    ELSE 'Need Attention'
+                                END
+                        """))
+                        _c.execute(text("DROP TEMPORARY TABLE IF EXISTS _tmp_rfm_scores"))
+                    logger.info("bg agg_customer_rfm: incremental update + NTILE rescore done")
+                except Exception as _e:
+                    logger.warning("bg agg_customer_rfm update failed: %s", _e)
+
+            # 4e. Rebuild item_trends parquet SAU KHI agg_customer_rfm đã được cập nhật
+            try:
+                from modules.item_trends.service import build_customer_segments_cache
+                build_customer_segments_cache(force_refresh=True)
+            except Exception as _e:
+                logger.warning("bg item_trends cache refresh failed: %s", _e)
+
+            # 4f. Clear analytics cache SAU KHI tất cả bảng aggregate đã được rebuild
+            #     (tránh serve stale data từ DB trong lúc rebuild chưa xong)
+            try:
+                from modules.data_management.analytics import clear_all_caches as _an_clear
+                _an_clear()
+            except Exception:
+                pass
+
+            # 4g. Trigger realtime DW poll
+            try:
+                from modules.realtime.router import _poll_dw_once
+                _poll_dw_once()
+            except Exception as _e:
+                logger.warning("bg realtime poll failed: %s", _e)
+
+        threading.Thread(target=_bg_refresh, daemon=True).start()
 
         elapsed = round((_time.perf_counter() - t0) * 1000)
         logger.info("Fast refresh completed in %d ms", elapsed)
