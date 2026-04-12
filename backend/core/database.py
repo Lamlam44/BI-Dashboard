@@ -10,20 +10,29 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+import config  # Import file config đã sửa để lấy thông số SSL
 
+# ── Use centralized configuration ──────────────────────────────────────────
+DB_HOST = config.DW_HOST
+DB_PORT = config.DW_PORT
+DB_USER = config.DW_USER
+DB_PASSWORD = config.DW_PASSWORD
+DB_NAME = config.DW_DATABASE
 
-DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
-DB_PORT = int(os.getenv("DB_PORT", "3306"))
-DB_USER = os.getenv("DB_USER", "root")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "12345")
-DB_NAME = os.getenv("DB_NAME", "retails_dataset")
-
+# Cấu hình SSL bắt buộc cho TiDB Cloud Serverless
+CONNECT_ARGS = {
+    "ssl": {
+        "ca": config.DW_SSL_CA
+    },
+    "connect_timeout": 10
+}
 
 _ENGINE: Optional[Engine] = None
 _RESOLVED_DB_NAME: Optional[str] = None
 
 
 def _build_url(database: str) -> str:
+    # Không để SSL trong URL để tránh xung đột với connect_args
     return f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{database}?charset=utf8mb4"
 
 
@@ -33,10 +42,12 @@ def resolve_database_name() -> str:
         return _RESOLVED_DB_NAME
 
     preferred = [DB_NAME, "retails_datasets", "retails_dataset"]
+    
+    # Thêm CONNECT_ARGS (SSL) vào đây để có thể truy cập information_schema
     discovery_engine = create_engine(
         _build_url("information_schema"),
         pool_pre_ping=True,
-        connect_args={"connect_timeout": 5},
+        connect_args=CONNECT_ARGS,
     )
 
     with discovery_engine.connect() as conn:
@@ -59,7 +70,8 @@ def resolve_database_name() -> str:
         ).all()
 
     if not db_rows:
-        raise RuntimeError("No MySQL database containing 'retail' was found.")
+        # Nếu không tìm thấy, trả về DB_NAME mặc định để tránh lỗi logic
+        return DB_NAME
 
     _RESOLVED_DB_NAME = str(db_rows[0][0])
     return _RESOLVED_DB_NAME
@@ -71,11 +83,11 @@ def get_engine() -> Engine:
         db_name = resolve_database_name()
         _ENGINE = create_engine(
             _build_url(db_name),
-            pool_size=10,
-            max_overflow=20,
+            pool_size=5,        # Giảm pool_size để tiết kiệm RAM trên Render
+            max_overflow=10,
             pool_recycle=3600,
             pool_pre_ping=True,
-            connect_args={"connect_timeout": 5},
+            connect_args=CONNECT_ARGS, # Áp dụng SSL
         )
     return _ENGINE
 
@@ -148,15 +160,11 @@ def iter_rows(
     chunk_threshold: int = 10000,
 ) -> Iterable[Dict[str, Any]]:
     engine = get_engine()
+    # Chế độ stream_results rất quan trọng với database 2.4GB để tránh tràn RAM
     with engine.connect().execution_options(stream_results=True) as conn:
         result = conn.execute(text(sql), params or {})
-        row_count = result.rowcount if result.rowcount is not None else -1
-        if row_count != -1 and row_count < chunk_threshold:
-            for row in result.mappings().all():
-                yield dict(row)
-        else:
-            for row in result.mappings():
-                yield dict(row)
+        for row in result.mappings():
+            yield dict(row)
 
 
 def table_exists(table_name: str) -> bool:
