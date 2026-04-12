@@ -2,36 +2,16 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import {
-  BarChart3,
-  TrendingUp,
-  Users,
-  Sparkles,
-  Database,
-} from 'lucide-react';
+import { BarChart3 } from 'lucide-react';
 import { useAuth } from '../store/useAuth';
-
-/** Which roles can see each page */
-const ROLE_ACCESS: Record<string, string[]> = {
-  '/dashboard':              ['executive', 'regional_manager', 'store_manager', 'admin'],
-  '/item-trends':            ['executive', 'regional_manager', 'store_manager', 'admin'],
-  '/employee-performance':   ['executive', 'regional_manager', 'admin'],
-  '/forecasting':            ['executive', 'admin'],
-  '/data-management':        ['admin'],
-};
+import { NAV_ITEMS, ROLE_ACCESS } from '../lib/routes';
 
 const Sidebar = () => {
   const pathname = usePathname();
   const { user } = useAuth();
   const role = user?.role || 'store_manager';
 
-  const navItems = [
-    { href: '/dashboard', label: 'Doanh Thu & Lợi Nhuận', icon: BarChart3 },
-    { href: '/item-trends', label: 'Xu Hướng Sản Phẩm', icon: TrendingUp },
-    { href: '/employee-performance', label: 'Hiệu Suất Nhân Viên', icon: Users },
-    { href: '/forecasting', label: 'Dự Báo AI', icon: Sparkles },
-    { href: '/data-management', label: 'Quản Lý Dữ Liệu', icon: Database },
-  ].filter(item => (ROLE_ACCESS[item.href] || []).includes(role));
+  const navItems = NAV_ITEMS.filter(item => (ROLE_ACCESS[item.href] || []).includes(role));
 
   const isActive = (href: string) => {
     if (href === '/dashboard') {

@@ -7,16 +7,17 @@ import DashboardLayout from '../components/DashboardLayout';
 import Section from '../components/Section';
 import { useAuth } from '../store/useAuth';
 
-import StatsCards from './StatsCards';
-import CustomerChart from './CustomerChart';
-import LocationChart from './LocationChart';
-import TrendingProductsChart from './TrendingProductsChart';
-import PromotionImpactChart from './PromotionImpactChart';
-import RfmSegmentsChart from './RfmSegmentsChart';
-import ProductPerformanceChart from './ProductPerformanceChart';
-import InventoryMetricsChart from './InventoryMetricsChart';
+import StatsCards from './components/StatsCards';
+import CustomerChart from './components/CustomerChart';
+import LocationChart from './components/LocationChart';
+import TrendingProductsChart from './components/TrendingProductsChart';
+import PromotionImpactChart from './components/PromotionImpactChart';
+import RfmSegmentsChart from './components/RfmSegmentsChart';
+import ProductPerformanceChart from './components/ProductPerformanceChart';
+import InventoryMetricsChart from './components/InventoryMetricsChart';
+import { allowedRoles } from '../lib/routes';
 
-const ALLOWED_ROLES = ['executive', 'regional_manager', 'store_manager', 'admin'];
+const ALLOWED_ROLES = allowedRoles('/item-trends');
 
 const ItemTrends = () => {
   const router = useRouter();

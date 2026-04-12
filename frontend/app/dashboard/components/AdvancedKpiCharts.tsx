@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import api, { API_BASE_URL } from '../lib/api';
-import { useRefresh } from '../components/RefreshProvider';
+import api, { API_BASE_URL } from '../../lib/api';
+import { useRefresh } from '../../components/RefreshProvider';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
   PieChart, Pie, Cell,

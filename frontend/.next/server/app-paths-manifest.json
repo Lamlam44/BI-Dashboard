@@ -1,5 +1,5 @@
 {
   "/item-trends/page": "app/item-trends/page.js",
-  "/page": "app/page.js",
-  "/dashboard/page": "app/dashboard/page.js"
+  "/dashboard/page": "app/dashboard/page.js",
+  "/employee-performance/page": "app/employee-performance/page.js"
 }

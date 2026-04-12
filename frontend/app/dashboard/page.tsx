@@ -9,8 +9,8 @@ import {
   Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart,
   Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
-import KpiSummaryCards from './KpiSummaryCards';
-import { SalesPerSqftChart, BudgetVsActualChart, StockoutRateChart, SafetyStockChart } from './AdvancedKpiCharts';
+import KpiSummaryCards from './components/KpiSummaryCards';
+import { SalesPerSqftChart, BudgetVsActualChart, StockoutRateChart, SafetyStockChart } from './components/AdvancedKpiCharts';
 import { authHeaders } from '../lib/api';
 import { useAuth } from '../store/useAuth';
 

@@ -1,8 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
 import axios from 'axios';
-import { useRefresh } from '../components/RefreshProvider';
-import { API_BASE_URL } from '../lib/api';
+import { useRefresh } from '../../components/RefreshProvider';
+import { API_BASE_URL } from '../../lib/api';
 
 interface Props {
   selectedYear: string;

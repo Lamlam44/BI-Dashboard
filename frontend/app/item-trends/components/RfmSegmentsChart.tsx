@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { useRefresh } from '../components/RefreshProvider';
+import { useRefresh } from '../../components/RefreshProvider';
 import {
   BarChart,
   Bar,
@@ -11,7 +11,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from 'recharts';
-import { API_BASE_URL } from '../lib/api';
+import { API_BASE_URL } from '../../lib/api';
 
 interface RfmSegment {
   rfm_segment: string;

@@ -5,8 +5,9 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "../store/useAuth";
 import DashboardLayout from "../components/DashboardLayout";
 import ForecastingClient from "./client-page";
+import { allowedRoles } from "../lib/routes";
 
-const ALLOWED_ROLES = ["executive", "admin"];
+const ALLOWED_ROLES = allowedRoles('/forecasting');
 
 export default function ForecastingPage() {
   const router = useRouter();

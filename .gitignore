@@ -65,3 +65,14 @@ BI_Datasets/
 # Generated ML Models and Backups
 backend/data_management/backups/
 frontend/.next/
+extracted_images/
+Data/
+
+10B_DeCuong.docx
+Báo cáo DACN_10B (2).docx
+Chuong_3_Xay_Dung_Va_Thuc_Nghiem.docx
+Muc_2_3_Thiet_Ke_He_Thong.docx
+Muc_3_1_Backend_va_Mo_Hinh_AI.docx
+Muc_3_2_Xay_Dung_Frontend_Dashboard.docx
+export_db.py
+retails_dataset_export.rar

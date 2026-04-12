@@ -3,8 +3,8 @@ import { useEffect, useState } from 'react';
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend } from 'chart.js';
 import { Bar } from 'react-chartjs-2';
 import axios from 'axios';
-import { useRefresh } from '../components/RefreshProvider';
-import { API_BASE_URL } from '../lib/api';
+import { useRefresh } from '../../components/RefreshProvider';
+import { API_BASE_URL } from '../../lib/api';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
 

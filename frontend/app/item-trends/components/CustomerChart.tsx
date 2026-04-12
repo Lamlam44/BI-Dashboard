@@ -4,8 +4,8 @@ import { Chart as ChartJS, ArcElement, Tooltip, Legend, ChartData } from 'chart.
 import { Doughnut } from 'react-chartjs-2';
 import ChartDataLabels from 'chartjs-plugin-datalabels'; // Import Plugin mới
 import axios from 'axios';
-import { useRefresh } from '../components/RefreshProvider';
-import { API_BASE_URL } from '../lib/api';
+import { useRefresh } from '../../components/RefreshProvider';
+import { API_BASE_URL } from '../../lib/api';
 
 // Đăng ký các thành phần bao gồm cả ChartDataLabels
 //ChartJS.register(ArcElement, Tooltip, Legend, ChartDataLabels);
