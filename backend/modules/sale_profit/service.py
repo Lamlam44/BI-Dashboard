@@ -85,29 +85,28 @@ def _build_sales_profit_snapshot() -> pd.DataFrame:
                 s.DateKey                   AS DateKey,
                 CAST(s.StoreKey AS SIGNED)  AS StoreKey,
                 COALESCE(ds.StoreName, CONCAT('Store ', s.StoreKey)) AS StoreName,
-                SUM(s.total_sales_amount)
-                  - COALESCE(SUM(s.total_return_amount), 0)
-                  - COALESCE(SUM(s.total_discount_amount), 0) AS total_sales,
-                SUM(s.total_sales_quantity * p.UnitCost)   AS total_cost,
-                SUM(s.total_sales_amount)
-                  - COALESCE(SUM(s.total_return_amount), 0)
-                  - COALESCE(SUM(s.total_discount_amount), 0)
-                  - SUM(s.total_sales_quantity * p.UnitCost) AS gross_profit,
+                SUM(s.total_sales_amount
+                  - COALESCE(s.total_return_amount, 0)
+                  - COALESCE(s.total_discount_amount, 0)) AS total_sales,
+                SUM(COALESCE(s.total_cost, 0))            AS total_cost,
+                SUM(s.total_sales_amount
+                  - COALESCE(s.total_return_amount, 0)
+                  - COALESCE(s.total_discount_amount, 0))
+                  - SUM(COALESCE(s.total_cost, 0))        AS gross_profit,
                 CASE
-                    WHEN SUM(s.total_sales_amount)
-                         - COALESCE(SUM(s.total_return_amount), 0)
-                         - COALESCE(SUM(s.total_discount_amount), 0) = 0 THEN 0
-                    ELSE (SUM(s.total_sales_amount)
-                          - COALESCE(SUM(s.total_return_amount), 0)
-                          - COALESCE(SUM(s.total_discount_amount), 0)
-                          - SUM(s.total_sales_quantity * p.UnitCost))
-                         / (SUM(s.total_sales_amount)
-                            - COALESCE(SUM(s.total_return_amount), 0)
-                            - COALESCE(SUM(s.total_discount_amount), 0))
+                    WHEN SUM(s.total_sales_amount
+                         - COALESCE(s.total_return_amount, 0)
+                         - COALESCE(s.total_discount_amount, 0)) = 0 THEN 0
+                    ELSE (SUM(s.total_sales_amount
+                          - COALESCE(s.total_return_amount, 0)
+                          - COALESCE(s.total_discount_amount, 0))
+                          - SUM(COALESCE(s.total_cost, 0)))
+                         / SUM(s.total_sales_amount
+                            - COALESCE(s.total_return_amount, 0)
+                            - COALESCE(s.total_discount_amount, 0))
                 END AS profit_margin
             FROM summary_daily_sales s
-            LEFT JOIN DimStore ds  ON ds.StoreKey = s.StoreKey
-            LEFT JOIN DimProduct p ON p.ProductKey = s.ProductKey
+            LEFT JOIN DimStore ds ON ds.StoreKey = s.StoreKey
             GROUP BY s.DateKey, s.StoreKey, StoreName
             ORDER BY s.DateKey
             """

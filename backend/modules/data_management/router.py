@@ -19,7 +19,6 @@ from .analytics import router as analytics_router
 from core.database import get_engine, serialize_payload
 from core.config import (
     DW_HOST, DW_PORT, DW_USER, DW_PASSWORD, DW_DATABASE,
-    POS_HOST, POS_PORT, POS_USER, POS_PASSWORD, POS_DATABASE,
 )
 from .config import BACKUP_DIR, SCHEMA_FILE
 
@@ -62,12 +61,13 @@ def _refresh_summary_and_cache() -> None:
                     REPLACE INTO summary_daily_sales
                         (DateKey, StoreKey, ProductKey, PromotionKey,
                          total_sales_quantity, total_sales_amount,
-                         total_return_amount, total_discount_amount)
+                         total_return_amount, total_discount_amount, total_cost)
                     SELECT
                         DATE(DateKey), COALESCE(StoreKey,0), ProductKey,
                         COALESCE(PromotionKey,0),
                         SUM(SalesQuantity), SUM(SalesAmount),
-                        SUM(COALESCE(ReturnAmount,0)), SUM(COALESCE(DiscountAmount,0))
+                        SUM(COALESCE(ReturnAmount,0)), SUM(COALESCE(DiscountAmount,0)),
+                        SUM(COALESCE(TotalCost,0))
                     FROM FactSales
                     WHERE SalesKey > :wm
                     GROUP BY DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0)
@@ -80,12 +80,13 @@ def _refresh_summary_and_cache() -> None:
                     REPLACE INTO summary_daily_sales
                         (DateKey, StoreKey, ProductKey, PromotionKey,
                          total_sales_quantity, total_sales_amount,
-                         total_return_amount, total_discount_amount)
+                         total_return_amount, total_discount_amount, total_cost)
                     SELECT
                         DATE(DateKey), COALESCE(StoreKey,0), ProductKey,
                         COALESCE(PromotionKey,0),
                         SUM(SalesQuantity), SUM(SalesAmount),
-                        SUM(COALESCE(ReturnAmount,0)), SUM(COALESCE(DiscountAmount,0))
+                        SUM(COALESCE(ReturnAmount,0)), SUM(COALESCE(DiscountAmount,0)),
+                        SUM(COALESCE(TotalCost,0))
                     FROM FactOnlineSales
                     WHERE OnlineSalesKey > :wm
                     GROUP BY DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0)
@@ -104,11 +105,67 @@ def _refresh_summary_and_cache() -> None:
         else:
             logger.info("summary_daily_sales: no new rows to process")
 
+        # ── agg_store_monthly_sales: monthly sales per store ─────
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS agg_store_monthly_sales (
+                store_key           INT NOT NULL,
+                calendar_year       INT NOT NULL,
+                month_number        INT NOT NULL,
+                total_sales_amount  DECIMAL(18,2) NOT NULL DEFAULT 0,
+                total_sales_quantity DECIMAL(14,2) NOT NULL DEFAULT 0,
+                order_count         INT NOT NULL DEFAULT 0,
+                PRIMARY KEY (store_key, calendar_year, month_number)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """))
+        if not _agg_store_monthly_sales_has_data(conn):
+            _rebuild_agg_store_monthly_sales(conn)
+        elif has_new and int(max_sales) > int(wm_sales):
+            _upsert_agg_store_monthly_sales_from_factsales(conn, int(wm_sales))
+
     # Rebuild parquet cache and clear in-memory caches
     from modules.sale_profit.service import refresh_sales_profit_cache, clear_all_caches
     clear_all_caches()
     refresh_sales_profit_cache()
     logger.info("Parquet cache and in-memory caches refreshed")
+
+
+def _agg_store_monthly_sales_has_data(conn) -> bool:
+    row = conn.execute(text("SELECT COUNT(*) FROM agg_store_monthly_sales")).scalar()
+    return bool(row)
+
+
+def _rebuild_agg_store_monthly_sales(conn) -> None:
+    conn.execute(text("DELETE FROM agg_store_monthly_sales"))
+    conn.execute(text("""
+        INSERT INTO agg_store_monthly_sales
+            (store_key, calendar_year, month_number,
+             total_sales_amount, total_sales_quantity, order_count)
+        SELECT
+            StoreKey, YEAR(DateKey), MONTH(DateKey),
+            SUM(total_sales_amount), SUM(total_sales_quantity), COUNT(*)
+        FROM summary_daily_sales
+        GROUP BY StoreKey, YEAR(DateKey), MONTH(DateKey)
+    """))
+    logger.info("agg_store_monthly_sales rebuilt (full)")
+
+
+def _upsert_agg_store_monthly_sales_from_factsales(conn, sales_wm: int) -> None:
+    conn.execute(text(f"""
+        INSERT INTO agg_store_monthly_sales
+            (store_key, calendar_year, month_number,
+             total_sales_amount, total_sales_quantity, order_count)
+        SELECT
+            COALESCE(StoreKey, 0), YEAR(DateKey), MONTH(DateKey),
+            SUM(SalesAmount), SUM(SalesQuantity), COUNT(*)
+        FROM FactSales
+        WHERE SalesKey > {sales_wm}
+        GROUP BY COALESCE(StoreKey, 0), YEAR(DateKey), MONTH(DateKey)
+        ON DUPLICATE KEY UPDATE
+            total_sales_amount   = total_sales_amount   + VALUES(total_sales_amount),
+            total_sales_quantity = total_sales_quantity + VALUES(total_sales_quantity),
+            order_count          = order_count          + VALUES(order_count)
+    """))
+    logger.info(f"agg_store_monthly_sales updated (incremental, wm={sales_wm})")
 
 
 def _refresh_summary_for_purge(table_name: str, start_date: str = None, end_date: str = None) -> None:
@@ -144,12 +201,13 @@ def _refresh_summary_for_purge(table_name: str, start_date: str = None, end_date
             REPLACE INTO summary_daily_sales
                 (DateKey, StoreKey, ProductKey, PromotionKey,
                  total_sales_quantity, total_sales_amount,
-                 total_return_amount, total_discount_amount)
+                 total_return_amount, total_discount_amount, total_cost)
             SELECT
                 DATE(DateKey), COALESCE(StoreKey,0), ProductKey,
                 COALESCE(PromotionKey,0),
                 SUM(SalesQuantity), SUM(SalesAmount),
-                SUM(COALESCE(ReturnAmount,0)), SUM(COALESCE(DiscountAmount,0))
+                SUM(COALESCE(ReturnAmount,0)), SUM(COALESCE(DiscountAmount,0)),
+                SUM(COALESCE(TotalCost,0))
             FROM v_total_sales
             {date_filter}
             GROUP BY DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0)
@@ -656,23 +714,8 @@ _DATA_SOURCES_FILE = os.path.join(os.path.dirname(__file__), "data_sources.json"
 
 def _load_data_sources() -> List[Dict[str, Any]]:
     if not os.path.exists(_DATA_SOURCES_FILE):
-        # Default: POS system connection
-        default_sources = [
-            {
-                "id": "pos_system",
-                "name": "POS System (pos_system)",
-                "type": "mysql",
-                "host": POS_HOST or "127.0.0.1",
-                "port": POS_PORT or 3306,
-                "database": POS_DATABASE or "pos_system",
-                "user": POS_USER or "root",
-                "status": "connected",
-                "last_sync": None,
-                "created_at": datetime.now().isoformat(),
-            }
-        ]
-        _save_data_sources(default_sources)
-        return default_sources
+        _save_data_sources([])
+        return []
     with open(_DATA_SOURCES_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -727,7 +770,7 @@ def test_data_source(source_id: str, password: Optional[str] = None):
 
     try:
         from sqlalchemy import create_engine as ce
-        pwd = password or (POS_PASSWORD if source["database"] == POS_DATABASE else DW_PASSWORD) or "12345"
+        pwd = password or DW_PASSWORD or "12345"
         url = f"mysql+pymysql://{source['user']}:{pwd}@{source['host']}:{source['port']}/{source['database']}?charset=utf8mb4"
         eng = ce(url, pool_pre_ping=True)
         with eng.connect() as conn:
@@ -913,6 +956,156 @@ def etl_run_trigger():
 
     threading.Thread(target=_run_etl, daemon=True).start()
     return serialize_payload({"status": "started", "message": "ETL pipeline started in background."})
+
+
+@router.post("/etl/fast-refresh")
+def etl_fast_refresh():
+    """Đồng bộ fast refresh — hoàn tất trong <3 giây.
+
+    Các bước đồng bộ (blocking, chỉ đọc rows mới kể từ watermark):
+      1. Cập nhật summary_daily_sales (incremental, watermarked)
+      2. Cập nhật agg_kpi_summary (incremental delta, không scan toàn bộ)
+      3. Xóa TTL cache in-memory
+
+    Các bước không đồng bộ (background, không block response):
+      4. Rebuild parquet cache
+      5. Realtime snapshot poll
+    """
+    import time as _time
+    t0 = _time.perf_counter()
+    try:
+        engine = get_engine()
+
+        # ── Bước 1: Incremental update summary_daily_sales ─────────
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS _summary_watermarks (
+                    source_table VARCHAR(64) PRIMARY KEY,
+                    last_key BIGINT NOT NULL DEFAULT 0
+                ) ENGINE=InnoDB
+            """))
+            wm_sales = conn.execute(text(
+                "SELECT COALESCE((SELECT last_key FROM _summary_watermarks WHERE source_table='FactSales'),0)"
+            )).scalar() or 0
+            wm_online = conn.execute(text(
+                "SELECT COALESCE((SELECT last_key FROM _summary_watermarks WHERE source_table='FactOnlineSales'),0)"
+            )).scalar() or 0
+            max_sales  = conn.execute(text("SELECT COALESCE(MAX(SalesKey),0) FROM FactSales")).scalar() or 0
+            max_online = conn.execute(text("SELECT COALESCE(MAX(OnlineSalesKey),0) FROM FactOnlineSales")).scalar() or 0
+
+            # Delta stats from new FactSales rows (chỉ rows mới → rất nhanh)
+            delta_sales = conn.execute(text("""
+                SELECT
+                    COUNT(*)                      AS delta_cnt,
+                    COALESCE(SUM(SalesAmount), 0) AS delta_amt,
+                    COALESCE(SUM(TotalCost), 0)   AS delta_cost,
+                    COALESCE(SUM(SalesQuantity),0) AS delta_qty
+                FROM FactSales WHERE SalesKey > :wm
+            """), {"wm": int(wm_sales)}).mappings().first()
+
+            # Delta stats from new FactOnlineSales rows
+            delta_online = conn.execute(text("""
+                SELECT
+                    COUNT(*)                      AS delta_cnt,
+                    COALESCE(SUM(SalesAmount), 0) AS delta_amt,
+                    COALESCE(SUM(TotalCost), 0)   AS delta_cost,
+                    COALESCE(SUM(SalesQuantity),0) AS delta_qty
+                FROM FactOnlineSales WHERE OnlineSalesKey > :wm
+            """), {"wm": int(wm_online)}).mappings().first()
+
+            if int(max_sales) > int(wm_sales):
+                conn.execute(text("""
+                    REPLACE INTO summary_daily_sales
+                        (DateKey, StoreKey, ProductKey, PromotionKey,
+                         total_sales_quantity, total_sales_amount,
+                         total_return_amount, total_discount_amount, total_cost)
+                    SELECT DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0),
+                           SUM(SalesQuantity), SUM(SalesAmount),
+                           SUM(COALESCE(ReturnAmount,0)), SUM(COALESCE(DiscountAmount,0)),
+                           SUM(COALESCE(TotalCost,0))
+                    FROM FactSales WHERE SalesKey > :wm
+                    GROUP BY DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0)
+                """), {"wm": int(wm_sales)})
+                conn.execute(text("""
+                    INSERT INTO _summary_watermarks (source_table, last_key) VALUES ('FactSales', :v)
+                    ON DUPLICATE KEY UPDATE last_key = :v
+                """), {"v": int(max_sales)})
+
+            if int(max_online) > int(wm_online):
+                conn.execute(text("""
+                    REPLACE INTO summary_daily_sales
+                        (DateKey, StoreKey, ProductKey, PromotionKey,
+                         total_sales_quantity, total_sales_amount,
+                         total_return_amount, total_discount_amount, total_cost)
+                    SELECT DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0),
+                           SUM(SalesQuantity), SUM(SalesAmount),
+                           SUM(COALESCE(ReturnAmount,0)), SUM(COALESCE(DiscountAmount,0)),
+                           SUM(COALESCE(TotalCost,0))
+                    FROM FactOnlineSales WHERE OnlineSalesKey > :wm
+                    GROUP BY DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0)
+                """), {"wm": int(wm_online)})
+                conn.execute(text("""
+                    INSERT INTO _summary_watermarks (source_table, last_key) VALUES ('FactOnlineSales', :v)
+                    ON DUPLICATE KEY UPDATE last_key = :v
+                """), {"v": int(max_online)})
+
+        # ── Bước 2: Incremental update agg_kpi_summary ─────────────
+        # Dùng delta từ rows mới thay vì scan toàn bộ v_total_sales
+        total_delta_cnt  = int(delta_sales["delta_cnt"])  + int(delta_online["delta_cnt"])
+        total_delta_amt  = float(delta_sales["delta_amt"]) + float(delta_online["delta_amt"])
+        total_delta_cost = float(delta_sales["delta_cost"]) + float(delta_online["delta_cost"])
+        total_delta_qty  = float(delta_sales["delta_qty"])  + float(delta_online["delta_qty"])
+
+        if total_delta_cnt > 0:
+            with engine.connect() as conn:
+                # Đọc giá trị hiện tại từ agg_kpi_summary
+                existing = {
+                    row["kpi_key"]: float(row["kpi_value"])
+                    for row in conn.execute(text(
+                        "SELECT kpi_key, kpi_value FROM agg_kpi_summary"
+                    )).mappings().all()
+                }
+            new_cnt  = existing.get("total_transactions", 0) + total_delta_cnt
+            new_amt  = existing.get("total_revenue", 0)      + total_delta_amt
+            new_cost = (existing.get("total_revenue", 0) * (1 - existing.get("gross_margin", 0) / 100)
+                        if existing.get("total_revenue", 0) > 0 else 0) + total_delta_cost
+            new_qty  = existing.get("avg_basket_size", 0) * existing.get("total_transactions", 1) + total_delta_qty
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    REPLACE INTO agg_kpi_summary (kpi_key, kpi_label, kpi_value, kpi_unit, period)
+                    VALUES
+                      ('total_revenue',        'Total Revenue',             :rev,    'USD',   'ALL'),
+                      ('total_transactions',   'Total Transactions',        :cnt,    'count', 'ALL'),
+                      ('avg_transaction_value','Average Transaction Value', :avg_rv, 'USD',   'ALL'),
+                      ('avg_basket_size',      'Average Basket Size',       :avg_bs, 'units', 'ALL'),
+                      ('gross_margin',         'Gross Profit Margin',       :margin, 'pct',   'ALL')
+                """), {
+                    "rev":    new_amt,
+                    "cnt":    new_cnt,
+                    "avg_rv": new_amt / new_cnt if new_cnt else 0,
+                    "avg_bs": new_qty / new_cnt if new_cnt else 0,
+                    "margin": (new_amt - new_cost) / new_amt * 100 if new_amt else 0,
+                })
+
+        # ── Bước 3: Clear in-memory TTL cache ──────────────────────
+        from modules.sale_profit.service import clear_all_caches, refresh_sales_profit_cache
+        clear_all_caches()
+
+        # ── Bước 4 & 5: Background tasks (không block response) ────
+        threading.Thread(target=refresh_sales_profit_cache, daemon=True).start()
+        try:
+            from modules.realtime.router import _poll_dw_once
+            threading.Thread(target=_poll_dw_once, daemon=True).start()
+        except Exception:
+            pass
+
+        elapsed = round((_time.perf_counter() - t0) * 1000)
+        logger.info("Fast refresh completed in %d ms", elapsed)
+        return serialize_payload({"status": "ok", "elapsed_ms": elapsed})
+
+    except Exception as exc:
+        logger.error("Fast refresh failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.post("/etl/refresh-segments")

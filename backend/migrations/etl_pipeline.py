@@ -1,10 +1,7 @@
 """
-ETL Pipeline: Extract from POS System â†’ Transform â†’ Load into BI Data Warehouse.
+ETL Pipeline: Incremental aggregate table refresh for BI Data Warehouse.
 
-This module demonstrates a realistic ETL flow from a normalized operational
-database (pos_system) into the star-schema BI warehouse (retails_dataset).
-
-New aggregate tables created:
+Aggregate tables created/updated:
   - agg_inventory_metrics    (Inventory Turnover, GMROI, Sell-Through Rate)
   - agg_product_performance  (Product-level ABC classification, revenue rank)
   - agg_customer_rfm         (RFM segmentation scores)
@@ -53,7 +50,7 @@ def create_aggregate_tables(force: bool = False):
 def _run_aggregate_tables(force: bool = False):
     """Internal: actual implementation of create_aggregate_tables."""
     from core.database import CONNECT_ARGS as _DW_CONNECT_ARGS
-    # NullPool: khong giu connection, tranh vuot qua gioi han 25 conn TiDB Cloud
+    # [LOCAL] NullPool cho MySQL local
     engine = create_engine(
         _dw_url(),
         poolclass=NullPool,
@@ -651,16 +648,8 @@ def _run_aggregate_tables(force: bool = False):
 
 
 def run_etl():
-    """Run the full ETL pipeline: POSâ†’DW sync, then incrementally update all aggregate tables."""
-    # Step 1: Sync POS data into DW fact tables
-    try:
-        from modules.data_management.pos_etl import sync_pos_to_dw
-        stats = sync_pos_to_dw()
-        logger.info("POSâ†’DW sync: %s", stats)
-    except Exception as exc:
-        logger.warning("POSâ†’DW sync skipped: %s", exc)
-
-    # Step 2: Update aggregate tables (incremental)
+    """Run the full ETL pipeline: incrementally update all aggregate tables."""
+    # Sync aggregate tables (incremental)
     create_aggregate_tables(force=False)
 
 

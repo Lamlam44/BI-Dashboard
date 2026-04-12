@@ -29,13 +29,25 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import text
+from pydantic import BaseModel
+from sqlalchemy import create_engine, text
 
 from core.database import get_engine
 
 logger = logging.getLogger(__name__)
+
+
+def _get_ingest_engine():
+    """Separate engine with NullPool for ingest requests — avoids pool exhaustion."""
+    from sqlalchemy.pool import NullPool
+    from core.config import DW_HOST, DW_PORT, DW_USER, DW_PASSWORD, DW_DATABASE
+    url = (
+        f"mysql+pymysql://{DW_USER}:{DW_PASSWORD}@{DW_HOST}:{DW_PORT}"
+        f"/{DW_DATABASE}?charset=utf8mb4"
+    )
+    return create_engine(url, poolclass=NullPool, connect_args={"connect_timeout": 10})
 
 # ── Poll interval constants ───────────────────────────────────
 DW_POLL_INTERVAL: int = 15   # background thread refreshes every 15 seconds
@@ -549,3 +561,258 @@ def rt_refresh():
     """Trigger immediate DW snapshot refresh."""
     threading.Thread(target=_poll_dw_once, daemon=True).start()
     return {"status": "ok", "message": f"Realtime DW snapshot refresh triggered for {_today()}"}
+
+
+# =============================================================
+# Invoice Ingest Endpoint
+# Receives JSON invoices from external POS simulators / integrations,
+# validates API key, then inserts into FactSales or FactOnlineSales.
+# =============================================================
+
+class IngestRequest(BaseModel):
+    invoices: List[Dict[str, Any]]
+
+
+@router.post("/ingest")
+def ingest_invoices(
+    body: IngestRequest,
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+):
+    """Receive invoice JSON and persist into retails_dataset.
+
+    Request body (JSON):
+    {
+        "invoices": [
+            {
+                "type": "offline" | "online",  // FactSales vs FactOnlineSales
+                ... all required fields ...
+            },
+            ...
+        ]
+    }
+
+    Authentication: X-API-Key header must match INGEST_API_KEY in config.
+    """
+    from core.config import INGEST_API_KEY
+
+    # ── Authenticate ────────────────────────────────────────────
+    if x_api_key != INGEST_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+    invoices = body.invoices
+    if not invoices:
+        raise HTTPException(status_code=400, detail="'invoices' array is required")
+
+    engine = _get_ingest_engine()
+    offline_batch: List[Dict[str, Any]] = []
+    online_batch: List[Dict[str, Any]] = []
+
+    for inv in invoices:
+        inv_type = str(inv.get("type", "offline")).lower()
+        if inv_type == "online":
+            online_batch.append(inv)
+        else:
+            offline_batch.append(inv)
+
+    inserted_offline = 0
+    inserted_online = 0
+    errors: List[str] = []
+
+    import time as _time
+
+    # Retry up to 3 times with back-off when DB is locked by startup ETL
+    _MAX_RETRIES = 3
+    last_exc = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            with engine.begin() as conn:
+                # Fail fast if table is locked by ETL
+                try:
+                    conn.execute(text("SET SESSION innodb_lock_wait_timeout = 5"))
+                    conn.execute(text("SET SESSION lock_wait_timeout = 5"))
+                except Exception:
+                    pass
+
+                # ── Get next available PKs ───────────────────────
+                if offline_batch:
+                    max_sales = conn.execute(
+                        text("SELECT COALESCE(MAX(SalesKey), 0) FROM FactSales")
+                    ).scalar() or 0
+                    next_sales_key = int(max_sales) + 1
+
+                    offline_rows = []
+                    for inv in offline_batch:
+                        row = {
+                            "key":          next_sales_key,
+                            "date_key":     inv.get("DateKey"),
+                            "channel_key":  inv.get("channelKey", 1),
+                            "store_key":    inv.get("StoreKey", 0),
+                            "product_key":  inv.get("ProductKey", 0),
+                            "promo_key":    inv.get("PromotionKey", 1),
+                            "currency_key": inv.get("CurrencyKey", 1),
+                            "unit_cost":    float(inv.get("UnitCost", 0)),
+                            "unit_price":   float(inv.get("UnitPrice", 0)),
+                            "sales_qty":    int(inv.get("SalesQuantity", 0)),
+                            "return_qty":   int(inv.get("ReturnQuantity", 0)),
+                            "return_amt":   float(inv.get("ReturnAmount", 0)),
+                            "disc_qty":     int(inv.get("DiscountQuantity", 0)),
+                            "disc_amt":     float(inv.get("DiscountAmount", 0)),
+                            "sales_amt":    float(inv.get("SalesAmount", 0)),
+                            "total_cost":   float(inv.get("TotalCost", 0)),
+                        }
+                        offline_rows.append(row)
+                        next_sales_key += 1
+
+                    conn.execute(text("""
+                        INSERT INTO FactSales
+                            (SalesKey, DateKey, channelKey, StoreKey, ProductKey,
+                             PromotionKey, CurrencyKey, UnitCost, UnitPrice,
+                             SalesQuantity, ReturnQuantity, ReturnAmount,
+                             DiscountQuantity, DiscountAmount, SalesAmount, TotalCost)
+                        VALUES
+                            (:key, :date_key, :channel_key, :store_key, :product_key,
+                             :promo_key, :currency_key, :unit_cost, :unit_price,
+                             :sales_qty, :return_qty, :return_amt,
+                             :disc_qty, :disc_amt, :sales_amt, :total_cost)
+                    """), offline_rows)
+                    inserted_offline = len(offline_rows)
+
+                if online_batch:
+                    max_online = conn.execute(
+                        text("SELECT COALESCE(MAX(OnlineSalesKey), 0) FROM FactOnlineSales")
+                    ).scalar() or 0
+                    next_online_key = int(max_online) + 1
+
+                    online_rows = []
+                    line_counter: Dict[str, int] = {}
+                    for inv in online_batch:
+                        order_no = inv.get("SalesOrderNumber", f"ORD-{next_online_key}")
+                        line_counter[order_no] = line_counter.get(order_no, 0) + 1
+                        row = {
+                            "key":         next_online_key,
+                            "date_key":    inv.get("DateKey"),
+                            "store_key":   inv.get("StoreKey", 0),
+                            "product_key": inv.get("ProductKey", 0),
+                            "promo_key":   inv.get("PromotionKey", 1),
+                            "curr_key":    inv.get("CurrencyKey", 1),
+                            "cust_key":    inv.get("CustomerKey", 0),
+                            "order_no":    order_no,
+                            "line_no":     inv.get("SalesOrderLineNumber", line_counter[order_no]),
+                            "sales_qty":   int(inv.get("SalesQuantity", 0)),
+                            "sales_amt":   float(inv.get("SalesAmount", 0)),
+                            "return_qty":  int(inv.get("ReturnQuantity", 0)),
+                            "return_amt":  float(inv.get("ReturnAmount", 0)),
+                            "disc_qty":    int(inv.get("DiscountQuantity", 0)),
+                            "disc_amt":    float(inv.get("DiscountAmount", 0)),
+                            "total_cost":  float(inv.get("TotalCost", 0)),
+                            "unit_cost":   float(inv.get("UnitCost", 0)),
+                            "unit_price":  float(inv.get("UnitPrice", 0)),
+                        }
+                        online_rows.append(row)
+                        next_online_key += 1
+
+                    conn.execute(text("""
+                        INSERT INTO FactOnlineSales
+                            (OnlineSalesKey, DateKey, StoreKey, ProductKey,
+                             PromotionKey, CurrencyKey, CustomerKey,
+                             SalesOrderNumber, SalesOrderLineNumber,
+                             SalesQuantity, SalesAmount,
+                             ReturnQuantity, ReturnAmount,
+                             DiscountQuantity, DiscountAmount,
+                             TotalCost, UnitCost, UnitPrice)
+                        VALUES
+                            (:key, :date_key, :store_key, :product_key,
+                             :promo_key, :curr_key, :cust_key,
+                             :order_no, :line_no,
+                             :sales_qty, :sales_amt,
+                             :return_qty, :return_amt,
+                             :disc_qty, :disc_amt,
+                             :total_cost, :unit_cost, :unit_price)
+                    """), online_rows)
+                    inserted_online = len(online_rows)
+
+            # Refresh summary + snapshot in background (non-blocking)
+            threading.Thread(
+                target=lambda: (
+                    _refresh_summary_after_ingest(engine),
+                    _poll_dw_once(),
+                ),
+                daemon=True,
+            ).start()
+            break  # success — exit retry loop
+
+        except Exception as exc:
+            last_exc = exc
+            err_str = str(exc)
+            is_lock = "1205" in err_str or "Lock wait timeout" in err_str or "1213" in err_str
+            if is_lock and attempt < _MAX_RETRIES - 1:
+                logger.warning("Ingest attempt %d blocked by DB lock, retrying…", attempt + 1)
+                _time.sleep(8)  # wait 8s before retry
+                continue
+            engine.dispose()
+            if is_lock:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Database bận (ETL đang chạy). Thử lại sau vài giây.",
+                )
+            logger.error("Invoice ingest error: %s", exc)
+            raise HTTPException(status_code=500, detail=f"Lỗi lưu dữ liệu: {exc}")
+
+    return {
+        "status": "success",
+        "inserted_offline": inserted_offline,
+        "inserted_online": inserted_online,
+        "errors": errors,
+    }
+
+
+def _refresh_summary_after_ingest(engine) -> None:
+    """Refresh summary_daily_sales for newly inserted rows."""
+    try:
+        with engine.begin() as conn:
+            wm_sales = conn.execute(text(
+                "SELECT COALESCE((SELECT last_key FROM _summary_watermarks WHERE source_table='FactSales'), 0)"
+            )).scalar() or 0
+            wm_online = conn.execute(text(
+                "SELECT COALESCE((SELECT last_key FROM _summary_watermarks WHERE source_table='FactOnlineSales'), 0)"
+            )).scalar() or 0
+            max_sales = conn.execute(text("SELECT COALESCE(MAX(SalesKey), 0) FROM FactSales")).scalar() or 0
+            max_online = conn.execute(text("SELECT COALESCE(MAX(OnlineSalesKey), 0) FROM FactOnlineSales")).scalar() or 0
+
+            if int(max_sales) > int(wm_sales):
+                conn.execute(text("""
+                    REPLACE INTO summary_daily_sales
+                        (DateKey, StoreKey, ProductKey, PromotionKey,
+                         total_sales_quantity, total_sales_amount,
+                         total_return_amount, total_discount_amount)
+                    SELECT
+                        DATE(DateKey), COALESCE(StoreKey, 0), ProductKey, COALESCE(PromotionKey, 0),
+                        SUM(SalesQuantity), SUM(SalesAmount),
+                        SUM(COALESCE(ReturnAmount, 0)), SUM(COALESCE(DiscountAmount, 0))
+                    FROM FactSales WHERE SalesKey > :wm
+                    GROUP BY DATE(DateKey), COALESCE(StoreKey, 0), ProductKey, COALESCE(PromotionKey, 0)
+                """), {"wm": int(wm_sales)})
+                conn.execute(text("""
+                    INSERT INTO _summary_watermarks (source_table, last_key) VALUES ('FactSales', :v)
+                    ON DUPLICATE KEY UPDATE last_key = :v
+                """), {"v": int(max_sales)})
+
+            if int(max_online) > int(wm_online):
+                conn.execute(text("""
+                    REPLACE INTO summary_daily_sales
+                        (DateKey, StoreKey, ProductKey, PromotionKey,
+                         total_sales_quantity, total_sales_amount,
+                         total_return_amount, total_discount_amount)
+                    SELECT
+                        DATE(DateKey), COALESCE(StoreKey, 0), ProductKey, COALESCE(PromotionKey, 0),
+                        SUM(SalesQuantity), SUM(SalesAmount),
+                        SUM(COALESCE(ReturnAmount, 0)), SUM(COALESCE(DiscountAmount, 0))
+                    FROM FactOnlineSales WHERE OnlineSalesKey > :wm
+                    GROUP BY DATE(DateKey), COALESCE(StoreKey, 0), ProductKey, COALESCE(PromotionKey, 0)
+                """), {"wm": int(wm_online)})
+                conn.execute(text("""
+                    INSERT INTO _summary_watermarks (source_table, last_key) VALUES ('FactOnlineSales', :v)
+                    ON DUPLICATE KEY UPDATE last_key = :v
+                """), {"v": int(max_online)})
+    except Exception as exc:
+        logger.warning("_refresh_summary_after_ingest: %s", exc)

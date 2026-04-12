@@ -56,10 +56,9 @@ def _resolve_year(year: Optional[int]) -> Optional[int]:
 
     row = fetch_one(
         """
-        SELECT CAST(MAX(d.CalendarYear) AS SIGNED) AS latest_year
+        SELECT YEAR(MAX(sds.DateKey)) AS latest_year
         FROM summary_daily_sales sds
-        JOIN DimDate d ON d.DateKey = sds.DateKey
-        WHERE d.CalendarYear IS NOT NULL
+        WHERE sds.DateKey IS NOT NULL
         """
     )
     if not row:
@@ -84,11 +83,11 @@ def _manager_filters_sql(
     store_val = _normalize_int(store_key)
 
     if year_val is not None:
-        clauses.append("d.CalendarYear = :year")
+        clauses.append("asm.calendar_year = :year")
         params["year"] = year_val
 
     if month_val is not None:
-        clauses.append("d.MonthNumber = :month")
+        clauses.append("asm.month_number = :month")
         params["month"] = month_val
 
     if employee_val is not None:
@@ -96,7 +95,7 @@ def _manager_filters_sql(
         params["employee_key"] = employee_val
 
     if store_val is not None:
-        clauses.append("sds.StoreKey = :store_key")
+        clauses.append("asm.store_key = :store_key")
         params["store_key"] = store_val
 
     return " AND ".join(clauses), params
@@ -106,37 +105,37 @@ def _manager_monthly_subquery(where_clause: str) -> str:
     return f"""
     SELECT
         ds.StoreManager AS employee_key,
-        sds.StoreKey AS store_key,
-        d.CalendarYear AS year,
-        d.MonthNumber AS month,
-        SUM(COALESCE(sds.total_sales_amount, 0)) AS total_sales_amount,
+        asm.store_key AS store_key,
+        asm.calendar_year AS year,
+        asm.month_number AS month,
+        asm.total_sales_amount,
         COALESCE(smc.total_return_amount, 0) AS total_return_amount,
-        SUM(COALESCE(sds.total_sales_amount, 0)) - COALESCE(smc.total_return_amount, 0) AS net_sales,
+        asm.total_sales_amount - COALESCE(smc.total_return_amount, 0) AS net_sales,
         COALESCE(smc.total_cost, 0) AS total_cost,
-        CASE WHEN SUM(COALESCE(sds.total_sales_amount, 0)) > 0
-             THEN (SUM(COALESCE(sds.total_sales_amount, 0)) - COALESCE(smc.total_cost, 0))
-                  / SUM(COALESCE(sds.total_sales_amount, 0)) * 100
+        CASE WHEN asm.total_sales_amount > 0
+             THEN (asm.total_sales_amount - COALESCE(smc.total_cost, 0))
+                  / asm.total_sales_amount * 100
              ELSE 0
         END AS profit_margin,
-        SUM(COALESCE(sds.total_sales_quantity, 0)) AS total_sales_quantity,
+        asm.total_sales_quantity,
         COALESCE(smc.total_return_quantity, 0) AS total_return_quantity,
-        CASE WHEN SUM(COALESCE(sds.total_sales_quantity, 0)) > 0
+        CASE WHEN asm.total_sales_quantity > 0
              THEN COALESCE(smc.total_return_quantity, 0)
-                  / SUM(COALESCE(sds.total_sales_quantity, 0)) * 100
+                  / asm.total_sales_quantity * 100
              ELSE 0
         END AS return_rate,
-        COUNT(*) AS order_count,
-        AVG(COALESCE(sds.total_sales_amount, 0)) AS avg_ticket_size
-    FROM summary_daily_sales sds
-    JOIN DimStore ds ON ds.StoreKey = sds.StoreKey
-    JOIN DimDate d ON d.DateKey = sds.DateKey
+        asm.order_count,
+        CASE WHEN asm.order_count > 0
+             THEN asm.total_sales_amount / asm.order_count
+             ELSE 0
+        END AS avg_ticket_size
+    FROM agg_store_monthly_sales asm
+    JOIN DimStore ds ON ds.StoreKey = asm.store_key
     LEFT JOIN agg_store_monthly_costs smc
-        ON smc.store_key = sds.StoreKey
-       AND smc.calendar_year = d.CalendarYear
-       AND smc.month_number = d.MonthNumber
+        ON smc.store_key = asm.store_key
+       AND smc.calendar_year = asm.calendar_year
+       AND smc.month_number = asm.month_number
     WHERE {where_clause}
-    GROUP BY ds.StoreManager, sds.StoreKey, d.CalendarYear, d.MonthNumber,
-             smc.total_return_amount, smc.total_cost, smc.total_return_quantity
     """
 
 
@@ -148,10 +147,9 @@ def get_filters() -> Dict[str, Any]:
 
     years = fetch_all(
         """
-        SELECT DISTINCT CAST(d.CalendarYear AS SIGNED) AS year
-        FROM summary_daily_sales sds
-        JOIN DimDate d ON d.DateKey = sds.DateKey
-        WHERE d.CalendarYear IS NOT NULL
+        SELECT DISTINCT calendar_year AS year
+        FROM agg_store_monthly_costs
+        WHERE calendar_year IS NOT NULL
         ORDER BY year DESC
         LIMIT 10
         """

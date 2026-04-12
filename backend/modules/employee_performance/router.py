@@ -65,10 +65,11 @@ def employee_performance_health():
 
 @router.get("/filters", response_model=EmployeeFiltersResponse)
 def employee_performance_filters(user: UserContext = Depends(get_current_user)):
-    result = get_filters()
-    # RLS: filter store options for non-admin users
+    cached = get_filters()
+    # Copy to avoid mutating the cached object when applying RLS store filter
+    result = {**cached, "stores": list(cached["stores"])}
     rls_keys = get_rls_store_keys(get_engine(), user)
-    if rls_keys is not None and "stores" in result:
+    if rls_keys is not None:
         result["stores"] = [s for s in result["stores"] if s.get("store_key") in rls_keys]
     return serialize_payload(result)
 

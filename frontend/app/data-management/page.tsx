@@ -484,7 +484,7 @@ function DataManagementContent() {
                   <h4 className="font-semibold text-blue-800 mb-2">1. Extract (Trích xuất)</h4>
                   <ul className="text-sm text-blue-700 space-y-1">
                     <li>• Upload file CSV/Excel từ nguồn bên ngoài</li>
-                    <li>• Kết nối database POS System</li>
+                    <li>• Nhận hóa đơn real-time từ Invoice Simulator</li>
                     <li>• Preview dữ liệu trước khi nạp</li>
                   </ul>
                 </div>

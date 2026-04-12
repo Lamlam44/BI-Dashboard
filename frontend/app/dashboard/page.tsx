@@ -11,7 +11,6 @@ import {
 } from 'recharts';
 import KpiSummaryCards from './components/KpiSummaryCards';
 import { SalesPerSqftChart, BudgetVsActualChart, StockoutRateChart, SafetyStockChart } from './components/AdvancedKpiCharts';
-import { authHeaders } from '../lib/api';
 import { useAuth } from '../store/useAuth';
 
 /* ── Types ──────────────────────────────────────────── */
@@ -32,7 +31,7 @@ type ChRes = {
 };
 
 /* ── Helpers ────────────────────────────────────────── */
-import { API_BASE_URL } from '../lib/api';
+import { API_BASE_URL, authenticatedFetch } from '../lib/api';
 const PIE_COLORS = ['#0ea5e9', '#22c55e', '#f59e0b', '#ef4444', '#a855f7', '#14b8a6', '#64748b'];
 
 const fmt$ = (v: number) =>
@@ -44,7 +43,7 @@ async function fetchJ<T>(url: string, ms = 120_000): Promise<T> {
   const c = new AbortController();
   const t = setTimeout(() => c.abort(), ms);
   try {
-    const r = await fetch(url, { signal: c.signal, headers: authHeaders() });
+    const r = await authenticatedFetch(url, { signal: c.signal });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return await r.json();
   } finally { clearTimeout(t); }

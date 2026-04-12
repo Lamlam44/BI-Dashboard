@@ -4,10 +4,10 @@ from core.database import get_engine, resolve_database_name
 
 
 INDEX_PLAN = {
-    "FactSales": ["DateKey", "StoreKey", "ProductKey", "PromotionKey"],
-    "FactOnlineSales": ["DateKey", "StoreKey", "ProductKey", "PromotionKey"],
-    "FactInventory": ["DateKey", "StoreKey", "ProductKey"],
-    "DimEmployee": ["EmployeeKey", "ParentEmployeeKey"],
+    "FactSales":       ["SalesKey", "DateKey", "StoreKey", "ProductKey", "PromotionKey"],
+    "FactOnlineSales": ["OnlineSalesKey", "DateKey", "StoreKey", "ProductKey", "PromotionKey"],
+    "FactInventory":   ["DateKey", "StoreKey", "ProductKey"],
+    "DimEmployee":     ["EmployeeKey", "ParentEmployeeKey"],
 }
 
 
@@ -139,6 +139,7 @@ def _ensure_summary_table() -> None:
         total_sales_amount DECIMAL(18, 2) NOT NULL DEFAULT 0,
         total_return_amount DECIMAL(18, 2) NOT NULL DEFAULT 0,
         total_discount_amount DECIMAL(18, 2) NOT NULL DEFAULT 0,
+        total_cost DECIMAL(18, 2) NOT NULL DEFAULT 0,
         PRIMARY KEY (DateKey, StoreKey, ProductKey, PromotionKey)
     )
     """
@@ -147,7 +148,7 @@ def _ensure_summary_table() -> None:
     REPLACE INTO summary_daily_sales
         (DateKey, StoreKey, ProductKey, PromotionKey,
          total_sales_quantity, total_sales_amount,
-         total_return_amount, total_discount_amount)
+         total_return_amount, total_discount_amount, total_cost)
     SELECT
         DATE(DateKey) AS DateKey,
         COALESCE(StoreKey, 0) AS StoreKey,
@@ -156,7 +157,8 @@ def _ensure_summary_table() -> None:
         SUM(SalesQuantity) AS total_sales_quantity,
         SUM(SalesAmount) AS total_sales_amount,
         SUM(COALESCE(ReturnAmount, 0)) AS total_return_amount,
-        SUM(COALESCE(DiscountAmount, 0)) AS total_discount_amount
+        SUM(COALESCE(DiscountAmount, 0)) AS total_discount_amount,
+        SUM(COALESCE(TotalCost, 0)) AS total_cost
     FROM v_total_sales
     GROUP BY DATE(DateKey), COALESCE(StoreKey, 0), ProductKey, COALESCE(PromotionKey, 0)
     """
@@ -168,6 +170,7 @@ def _ensure_summary_table() -> None:
         for col, coldef in [
             ("total_return_amount", "DECIMAL(18,2) NOT NULL DEFAULT 0"),
             ("total_discount_amount", "DECIMAL(18,2) NOT NULL DEFAULT 0"),
+            ("total_cost", "DECIMAL(18,2) NOT NULL DEFAULT 0"),
         ]:
             try:
                 conn.execute(text(

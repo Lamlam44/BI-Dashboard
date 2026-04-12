@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import axios from 'axios';
 import ExportPDFButton from '../components/ExportPDFButton';
 import DashboardLayout from '../components/DashboardLayout';
 import Section from '../components/Section';
@@ -16,6 +17,7 @@ import RfmSegmentsChart from './components/RfmSegmentsChart';
 import ProductPerformanceChart from './components/ProductPerformanceChart';
 import InventoryMetricsChart from './components/InventoryMetricsChart';
 import { allowedRoles } from '../lib/routes';
+import { API_BASE_URL } from '../lib/api';
 
 const ALLOWED_ROLES = allowedRoles('/item-trends');
 
@@ -33,8 +35,17 @@ const ItemTrends = () => {
   const reportRef = useRef<HTMLDivElement>(null);
   const [tempYear, setTempYear] = useState<string>('ALL');
   const [appliedYear, setAppliedYear] = useState<string>('ALL');
+  const [availableYears, setAvailableYears] = useState<string[]>([]);
 
-  const availableYears = ['2007', '2008', '2009'];
+  useEffect(() => {
+    axios.get(`${API_BASE_URL}/trends/api/available-years`)
+      .then(res => {
+        setAvailableYears((res.data as number[]).map(String));
+      })
+      .catch(() => {
+        setAvailableYears(['2007', '2008', '2009']);
+      });
+  }, []);
 
   const handleApplyFilter = () => {
     setAppliedYear(tempYear);

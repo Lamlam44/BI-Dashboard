@@ -64,6 +64,25 @@ export const useAuth = create<AuthState>((set) => ({
       const token = localStorage.getItem("bi_token");
       const raw = localStorage.getItem("bi_user");
       if (token && raw) {
+        // Decode JWT payload and check expiry (client-side fast check)
+        try {
+          const parts = token.split('.');
+          if (parts.length === 3) {
+            const padding = '='.repeat((4 - (parts[1].length % 4)) % 4);
+            const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/') + padding));
+            if (payload.exp && payload.exp < Date.now() / 1000) {
+              // Token expired — clear and force re-login
+              localStorage.removeItem("bi_token");
+              localStorage.removeItem("bi_user");
+              return;
+            }
+          }
+        } catch {
+          // Malformed token — discard it
+          localStorage.removeItem("bi_token");
+          localStorage.removeItem("bi_user");
+          return;
+        }
         const user = JSON.parse(raw) as AuthUser;
         set({ token, user });
       }

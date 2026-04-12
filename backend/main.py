@@ -44,7 +44,8 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3001",
         "http://127.0.0.1:3002",
-        "https://bi-dashboard-green.vercel.app",
+        # [CLOUD - COMMENTED OUT] Vercel deployment URL
+        # "https://bi-dashboard-green.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -79,12 +80,12 @@ def _run_startup_etl():
 
 
 def _run_periodic_etl():
-    """Auto-trigger full ETL pipeline every 30 seconds.
-    Syncs new POS orders → DW fact tables → aggregates → parquet cache.
+    """Auto-trigger aggregate ETL every 30 seconds.
+    Refreshes aggregate KPI tables from retails_dataset fact tables.
     Runs as a daemon thread so it never blocks the API server.
     """
     import time as _time
-    ETL_INTERVAL = 30  # 30 seconds — near real-time refresh
+    ETL_INTERVAL = 300  # 5 minutes — aggregate refresh interval
     _time.sleep(ETL_INTERVAL)  # Wait before first run (startup ETL already ran)
     while True:
         try:

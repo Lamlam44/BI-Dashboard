@@ -7,7 +7,7 @@ import { useAuth } from '../store/useAuth';
 import DashboardLayout from '../components/DashboardLayout';
 import Section from '../components/Section';
 import { useRefresh } from '../components/RefreshProvider';
-import { authHeaders } from '../lib/api';
+import { authenticatedFetch } from '../lib/api';
 import CapabilityPanel from './components/CapabilityPanel';
 import FiltersBar from './components/FiltersBar';
 import KpiCards from './components/KpiCards';
@@ -29,7 +29,7 @@ async function fetchJsonWithTimeout<T>(url: string, timeoutMs = 600000): Promise
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { signal: controller.signal, headers: authHeaders() });
+    const res = await authenticatedFetch(url, { signal: controller.signal });
     if (!res.ok) {
       throw new Error(`Request failed (${res.status})`);
     }
@@ -76,7 +76,7 @@ export default function EmployeePerformancePage() {
 
     async function loadFilters() {
       try {
-        const res = await fetch(`${API_BASE_URL}/employee-performance/filters`, { headers: authHeaders() });
+        const res = await authenticatedFetch(`${API_BASE_URL}/employee-performance/filters`);
         if (!res.ok) throw new Error('Failed to load filter options');
         const data = (await res.json()) as EmployeeFiltersResponse;
         if (mounted) {

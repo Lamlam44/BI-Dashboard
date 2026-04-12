@@ -79,15 +79,22 @@ export default function RefreshProvider({ children }: { children: React.ReactNod
     localStorage.setItem(STORAGE_KEY, String(m));
   }, []);
 
-  const forceRefresh = useCallback(() => {
+  const forceRefresh = useCallback(async () => {
     setIsRefreshing(true);
-    // Trigger backend ETL pipeline (fire-and-forget, no auth required)
-    fetch(`${API_BASE_URL}/data/etl/run`, { method: 'POST' }).catch(() => {});
-    // Bump refreshTick after 2s to let ETL start processing
-    setTimeout(() => {
-      setRefreshTick((t) => t + 1);
-      setIsRefreshing(false);
-    }, 2000);
+    try {
+      // Gọi fast-refresh đồng bộ — endpoint hoàn tất trong <3s, sau đó bump tick
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      await fetch(`${API_BASE_URL}/data/etl/fast-refresh`, {
+        method: 'POST',
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+    } catch {
+      // timeout hoặc lỗi mạng — vẫn refresh UI để không block người dùng
+    }
+    setRefreshTick((t) => t + 1);
+    setIsRefreshing(false);
   }, []);
 
   // Scheduled auto-refresh timer

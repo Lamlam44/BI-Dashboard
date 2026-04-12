@@ -80,6 +80,28 @@ def _fallback_customer_segments(start_date: Optional[str] = None, end_date: Opti
     return rows
 
 
+@router.get("/api/available-years")
+def get_available_years():
+    """Return distinct years present in summary_daily_sales, newest first."""
+    cache_key = _cache_key("available-years", None, None)
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    rows = fetch_all(
+        """
+        SELECT DISTINCT calendar_year AS year
+        FROM agg_store_monthly_costs
+        WHERE calendar_year IS NOT NULL
+        ORDER BY year DESC
+        LIMIT 20
+        """
+    )
+    payload = [int(row["year"]) for row in rows if row.get("year") is not None]
+    _cache_set(cache_key, payload)
+    return payload
+
+
 @router.get("/api/summary-stats")
 def summary_stats(start_date: Optional[str] = None, end_date: Optional[str] = None):
     where_clause, params = build_date_filter(start_date, end_date, alias="s")

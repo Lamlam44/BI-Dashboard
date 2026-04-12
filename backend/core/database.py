@@ -22,11 +22,16 @@ DB_USER = config.DW_USER
 DB_PASSWORD = config.DW_PASSWORD
 DB_NAME = config.DW_DATABASE
 
-# Cấu hình SSL bắt buộc cho TiDB Cloud Serverless
+# [CLOUD - COMMENTED OUT] Cấu hình SSL bắt buộc cho TiDB Cloud Serverless
+# CONNECT_ARGS = {
+#     "ssl": {
+#         "ca": config.DW_SSL_CA
+#     },
+#     "connect_timeout": 10
+# }
+
+# [LOCAL] Không cần SSL cho MySQL local
 CONNECT_ARGS = {
-    "ssl": {
-        "ca": config.DW_SSL_CA
-    },
     "connect_timeout": 10
 }
 
