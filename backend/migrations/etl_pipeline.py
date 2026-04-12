@@ -1,4 +1,4 @@
-﻿"""
+"""
 ETL Pipeline: Extract from POS System â†’ Transform â†’ Load into BI Data Warehouse.
 
 This module demonstrates a realistic ETL flow from a normalized operational
@@ -14,6 +14,7 @@ New aggregate tables created:
 import logging
 import threading
 from sqlalchemy import create_engine, text
+from sqlalchemy.pool import NullPool
 
 from core.config import DW_HOST, DW_PORT, DW_USER, DW_PASSWORD, DW_DATABASE
 
@@ -51,10 +52,17 @@ def create_aggregate_tables(force: bool = False):
 
 def _run_aggregate_tables(force: bool = False):
     """Internal: actual implementation of create_aggregate_tables."""
+    from core.database import CONNECT_ARGS as _DW_CONNECT_ARGS
+    # NullPool: khong giu connection, tranh vuot qua gioi han 25 conn TiDB Cloud
     engine = create_engine(
         _dw_url(),
-        pool_pre_ping=True,
-        connect_args={"connect_timeout": 28800, "read_timeout": 7200, "write_timeout": 7200},
+        poolclass=NullPool,
+        connect_args={
+            **_DW_CONNECT_ARGS,
+            "connect_timeout": 30,
+            "read_timeout":    900,
+            "write_timeout":   900,
+        },
     )
 
     def _table_has_data(conn, table_name: str) -> bool:
@@ -84,52 +92,86 @@ def _run_aggregate_tables(force: bool = False):
             {"t": tbl, "v": int(val)},
         )
 
+    # -- Phase 1: kiem tra du lieu moi, COMMIT watermarks truoc khi chay agg
+    # Neu Phase 2 fail, watermarks da luu -> vong lap ke tiep khong loop lai 9M rows
+    try:
+        with engine.begin() as wm_conn:
+            # â”€â”€ High-water mark table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            wm_conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS _etl_watermarks (
+                    table_name  VARCHAR(64) PRIMARY KEY,
+                    last_key    BIGINT      NOT NULL DEFAULT 0,
+                    updated_at  DATETIME    DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """))
+
+            # â”€â”€ Current maximums in each fact table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            sales_max  = wm_conn.execute(text("SELECT COALESCE(MAX(SalesKey),0)      FROM FactSales")).scalar()      or 0
+            inv_max    = wm_conn.execute(text("SELECT COALESCE(MAX(InventoryKey),0)   FROM FactInventory")).scalar()   or 0
+            online_max = wm_conn.execute(text("SELECT COALESCE(MAX(OnlineSalesKey),0) FROM FactOnlineSales")).scalar() or 0
+
+            sales_wm  = 0 if force else _get_wm(wm_conn, "FactSales")
+            inv_wm    = 0 if force else _get_wm(wm_conn, "FactInventory")
+            online_wm = 0 if force else _get_wm(wm_conn, "FactOnlineSales")
+
+            new_sales  = int(sales_max)  > int(sales_wm)
+            new_inv    = int(inv_max)    > int(inv_wm)
+            new_online = int(online_max) > int(online_wm)
+
+            if not (new_sales or new_inv or new_online):
+                logger.info("ETL: không có dữ liệu mới kể từ lần chạy trước, bỏ qua.")
+                engine.dispose()
+                return
+
+            logger.info(
+                "ETL incremental: FactSales +%d | FactInventory +%d | FactOnlineSales +%d",
+                int(sales_max) - int(sales_wm),
+                int(inv_max)   - int(inv_wm),
+                int(online_max) - int(online_wm),
+            )
+
+            # Commit watermarks truoc khi chay agg computation
+            _set_wm(wm_conn, "FactSales",       int(sales_max))
+            _set_wm(wm_conn, "FactInventory",   int(inv_max))
+            _set_wm(wm_conn, "FactOnlineSales", int(online_max))
+            logger.info(
+                "ETL watermarks committed (pre-agg): FactSales=%d FactInventory=%d FactOnlineSales=%d",
+                sales_max, inv_max, online_max,
+            )
+    except Exception as exc:
+        logger.error("ETL phase 1 (watermark) failed: %s", exc)
+        engine.dispose()
+        return
+
+    # -- Phase 2: tinh toan aggregate (NullPool -> connection moi)
+    # Neu fail: watermarks da saved, vong lap ke tiep khong loop lai
     with engine.begin() as conn:
 
-        # Boost timeouts and in-memory temp table size for heavy queries.
-        conn.execute(text("SET SESSION wait_timeout        = 86400"))   # 24 h
-        conn.execute(text("SET SESSION interactive_timeout = 86400"))   # 24 h
-        conn.execute(text("SET SESSION net_read_timeout    = 7200"))    # 2 h
-        conn.execute(text("SET SESSION net_write_timeout   = 7200"))    # 2 h
-        conn.execute(text("SET SESSION tmp_table_size      = 1073741824"))  # 1 GB
-        conn.execute(text("SET SESSION max_heap_table_size = 1073741824"))  # 1 GB
-
-        # â”€â”€ High-water mark table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        conn.execute(text("""
-            CREATE TABLE IF NOT EXISTS _etl_watermarks (
-                table_name  VARCHAR(64) PRIMARY KEY,
-                last_key    BIGINT      NOT NULL DEFAULT 0,
-                updated_at  DATETIME    DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-        """))
-
-        # â”€â”€ Current maximums in each fact table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        sales_max  = conn.execute(text("SELECT COALESCE(MAX(SalesKey),0)      FROM FactSales")).scalar()      or 0
-        inv_max    = conn.execute(text("SELECT COALESCE(MAX(InventoryKey),0)   FROM FactInventory")).scalar()   or 0
-        online_max = conn.execute(text("SELECT COALESCE(MAX(OnlineSalesKey),0) FROM FactOnlineSales")).scalar() or 0
-
-        sales_wm  = 0 if force else _get_wm(conn, "FactSales")
-        inv_wm    = 0 if force else _get_wm(conn, "FactInventory")
-        online_wm = 0 if force else _get_wm(conn, "FactOnlineSales")
-
-        new_sales  = int(sales_max)  > int(sales_wm)
-        new_inv    = int(inv_max)    > int(inv_wm)
-        new_online = int(online_max) > int(online_wm)
-
-        if not (new_sales or new_inv or new_online):
-            logger.info("ETL: không có dữ liệu mới kể từ lần chạy trước, bỏ qua.")
-            engine.dispose()
-            return
-
-        logger.info(
-            "ETL incremental: FactSales +%d | FactInventory +%d | FactOnlineSales +%d",
-            int(sales_max) - int(sales_wm),
-            int(inv_max)   - int(inv_wm),
-            int(online_max) - int(online_wm),
-        )
-
-        # Watermarks are saved at the END of this block (after all aggregates
-        # succeed) so that a mid-run crash causes a full retry on the next cycle.
+        # Boost timeouts - bo qua neu TiDB Cloud khong ho tro
+        try:
+            conn.execute(text("SET SESSION wait_timeout        = 86400"))   # 24 h
+        except Exception:
+            pass
+        try:
+            conn.execute(text("SET SESSION interactive_timeout = 86400"))   # 24 h
+        except Exception:
+            pass
+        try:
+            conn.execute(text("SET SESSION net_read_timeout    = 7200"))    # 2 h
+        except Exception:
+            pass
+        try:
+            conn.execute(text("SET SESSION net_write_timeout   = 7200"))    # 2 h
+        except Exception:
+            pass
+        try:
+            conn.execute(text("SET SESSION tmp_table_size      = 1073741824"))  # 1 GB
+        except Exception:
+            pass
+        try:
+            conn.execute(text("SET SESSION max_heap_table_size = 1073741824"))  # 1 GB
+        except Exception:
+            pass
 
         # ═══════════════════════════════════════════════════════════════
         # 1. agg_inventory_metrics
@@ -603,13 +645,6 @@ def _run_aggregate_tables(force: bool = False):
             logger.info("agg_channel_summary: no new data, skipping")
 
         # â”€â”€ LÆ°u watermarks sau khi táº¥t cáº£ thÃ nh cÃ´ng â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        _set_wm(conn, "FactSales",       int(sales_max))
-        _set_wm(conn, "FactInventory",   int(inv_max))
-        _set_wm(conn, "FactOnlineSales", int(online_max))
-        logger.info(
-            "ETL watermarks saved: FactSales=%d FactInventory=%d FactOnlineSales=%d",
-            sales_max, inv_max, online_max,
-        )
 
     engine.dispose()
     logger.info("ETL incremental update complete.")
