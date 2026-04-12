@@ -38,14 +38,16 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        # [LOCAL] localhost URLs
         "http://localhost:3000",
         "http://localhost:3001",
         "http://localhost:3002",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:3001",
         "http://127.0.0.1:3002",
-        # [CLOUD - COMMENTED OUT] Vercel deployment URL
-        # "https://bi-dashboard-green.vercel.app",
+        # [CLOUD] Vercel deployment URLs
+        "https://bi-dashboard-green.vercel.app",
+        "https://*.vercel.app",
     ],
     allow_credentials=True,
     allow_methods=["*"],
