@@ -11,9 +11,10 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-import config  # Import file config đã sửa để lấy thông số SSL
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import core.config as config  # Import file config đã sửa để lấy thông số SSL
+
 # ── Use centralized configuration ──────────────────────────────────────────
 DB_HOST = config.DW_HOST
 DB_PORT = config.DW_PORT
