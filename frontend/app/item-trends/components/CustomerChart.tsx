@@ -157,6 +157,16 @@ export default function CustomerChart({ selectedYear }: Props) {
           </div>
         ))}
       </div>
+
+      {/* Ghi chú: mỗi nhóm cơ bản gồm các phân khúc Advanced nào */}
+      <div className="mt-4 pt-3 border-t border-gray-100">
+        <p className="text-xs font-semibold text-gray-500 mb-2">📌 Mỗi nhóm bao gồm các phân khúc RFM Advanced:</p>
+        <div className="space-y-1 text-xs text-gray-600">
+          <div><span className="font-semibold" style={{ color: '#ef4444' }}>Khách VIP</span> — Champion, Loyal</div>
+          <div><span className="font-semibold" style={{ color: '#10b981' }}>Khách Tiềm Năng</span> — Potential Loyalist, New Customer, Need Attention</div>
+          <div><span className="font-semibold" style={{ color: '#3b82f6' }}>Nguy Cơ Rời Bỏ</span> — At Risk, Lost</div>
+        </div>
+      </div>
     </div>
   );
 }

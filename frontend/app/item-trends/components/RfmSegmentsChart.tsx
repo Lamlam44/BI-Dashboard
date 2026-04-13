@@ -30,6 +30,17 @@ const SEGMENT_COLORS: Record<string, string> = {
   Lost: '#ef4444',
 };
 
+// Ánh xạ từ nhóm Advanced → nhóm cơ bản (3 loại trong biểu đồ tròn RFM Segments)
+const BASIC_GROUP_MAP: Record<string, { label: string; color: string }> = {
+  Champion:           { label: 'Khách VIP',        color: '#ef4444' },
+  Loyal:              { label: 'Khách VIP',        color: '#ef4444' },
+  'Potential Loyalist': { label: 'Khách Tiềm Năng', color: '#10b981' },
+  'New Customer':     { label: 'Khách Tiềm Năng', color: '#10b981' },
+  'Need Attention':   { label: 'Khách Tiềm Năng', color: '#10b981' },
+  'At Risk':          { label: 'Nguy Cơ Rời Bỏ',  color: '#3b82f6' },
+  Lost:               { label: 'Nguy Cơ Rời Bỏ',  color: '#3b82f6' },
+};
+
 const formatMoney = (v: number) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v);
 
@@ -97,6 +108,7 @@ export default function RfmSegmentsChart() {
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
         {segments.map((s) => {
           const pct = totalCustomers ? ((s.customer_count / totalCustomers) * 100).toFixed(1) : '0';
+          const basicGroup = BASIC_GROUP_MAP[s.rfm_segment];
           return (
             <div
               key={s.rfm_segment}
@@ -104,6 +116,14 @@ export default function RfmSegmentsChart() {
               style={{ borderLeftColor: SEGMENT_COLORS[s.rfm_segment] || '#94a3b8', borderLeftWidth: 4 }}
             >
               <p className="font-semibold text-sm text-slate-800">{s.rfm_segment}</p>
+              {basicGroup && (
+                <span
+                  className="inline-block text-xs font-medium px-1.5 py-0.5 rounded mt-1"
+                  style={{ backgroundColor: basicGroup.color + '18', color: basicGroup.color }}
+                >
+                  {basicGroup.label}
+                </span>
+              )}
               <p className="text-xs text-slate-500 mt-1">
                 {s.customer_count.toLocaleString()} ({pct}%)
               </p>
@@ -112,6 +132,25 @@ export default function RfmSegmentsChart() {
             </div>
           );
         })}
+      </div>
+
+      {/* Ghi chú ánh xạ nhóm Advanced → Basic */}
+      <div className="mt-4 pt-3 border-t border-gray-100">
+        <p className="text-xs font-semibold text-gray-500 mb-2">📌 Ánh xạ sang 3 nhóm cơ bản (RFM Customer Segments):</p>
+        <div className="flex flex-wrap gap-3 text-xs text-gray-600">
+          <div className="flex items-center gap-1">
+            <span className="font-semibold" style={{ color: '#ef4444' }}>Khách VIP:</span>
+            <span>Champion, Loyal</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="font-semibold" style={{ color: '#10b981' }}>Khách Tiềm Năng:</span>
+            <span>Potential Loyalist, New Customer, Need Attention</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="font-semibold" style={{ color: '#3b82f6' }}>Nguy Cơ Rời Bỏ:</span>
+            <span>At Risk, Lost</span>
+          </div>
+        </div>
       </div>
     </div>
   );

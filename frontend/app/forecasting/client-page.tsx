@@ -329,6 +329,25 @@ export default function ForecastingClient() {
               />
             </div>
           </div>
+
+          {/* Ghi chú ý nghĩa ABC / XYZ */}
+          <div className="mt-3 bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-600">
+            <p className="font-semibold text-slate-700 mb-1">📌 Ý nghĩa phân loại ABC / XYZ:</p>
+            <div className="space-y-1">
+              <p>
+                <span className="font-semibold text-emerald-700">ABC</span> — Phân loại theo đóng góp doanh thu tích lũy:
+                &nbsp;<span className="font-medium text-emerald-700">A</span> = Top sản phẩm tạo ra 80% doanh thu (ưu tiên cao nhất);
+                &nbsp;<span className="font-medium text-amber-600">B</span> = Tiếp theo 15%;
+                &nbsp;<span className="font-medium text-red-500">C</span> = 5% còn lại (doanh thu thấp nhất).
+              </p>
+              <p>
+                <span className="font-semibold text-indigo-700">XYZ</span> — Phân loại theo mức biến động nhu cầu (hệ số CV = độ lệch chuẩn / trung bình):
+                &nbsp;<span className="font-medium text-indigo-700">X</span> = Nhu cầu ổn định, dễ dự báo (CV ≤ 0.5);
+                &nbsp;<span className="font-medium text-amber-600">Y</span> = Biến động vừa (0.5 &lt; CV ≤ 1.0);
+                &nbsp;<span className="font-medium text-red-500">Z</span> = Biến động cao, khó dự báo (CV &gt; 1.0).
+              </p>
+            </div>
+          </div>
           <p className="text-sm text-slate-600">Số SKU khớp: <b>{bulkRows.length}</b></p>
 
           <div className="overflow-auto max-h-80 border rounded-lg">
