@@ -1,8 +1,8 @@
 {
+  "/page": "app/page.js",
   "/dashboard/page": "app/dashboard/page.js",
+  "/item-trends/page": "app/item-trends/page.js",
   "/employee-performance/page": "app/employee-performance/page.js",
   "/forecasting/page": "app/forecasting/page.js",
-  "/item-trends/page": "app/item-trends/page.js",
-  "/login/page": "app/login/page.js",
   "/data-management/page": "app/data-management/page.js"
 }

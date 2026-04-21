@@ -44,15 +44,6 @@ interface DataSource {
   last_sync: string | null;
 }
 
-interface EtlStatus {
-  running: boolean;
-  last_run: string | null;
-  last_status: string;
-  last_error: string | null;
-  last_duration_seconds: number | null;
-  tables_built: string[];
-}
-
 interface CsvPreview {
   filename: string;
   rows: number;
@@ -139,10 +130,6 @@ function DataManagementContent() {
   // Data Sources
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
 
-  // Fast-refresh status banner
-  const [etlRunning, setEtlRunning] = useState(false);
-  const [etlMessage, setEtlMessage] = useState<string | null>(null);
-
   // CSV Upload
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const [csvPreview, setCsvPreview] = useState<CsvPreview | null>(null);
@@ -156,6 +143,18 @@ function DataManagementContent() {
   const [exportTable, setExportTable] = useState('');
   const [exportFormat, setExportFormat] = useState<'csv' | 'excel'>('excel');
   const [exportLoading, setExportLoading] = useState(false);
+
+  // Loading phase label for CSV upload
+  const [loadingPhase, setLoadingPhase] = useState<string>('');
+
+  // Background refresh progress after upload
+  const [refreshProgress, setRefreshProgress] = useState<{
+    running: boolean;
+    percent: number;
+    step: string;
+    error: string | null;
+  } | null>(null);
+  const refreshPollRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Sections toggle
   const [showDim, setShowDim] = useState(false);
@@ -177,21 +176,6 @@ function DataManagementContent() {
       .catch(() => {});
   }, []);
 
-  const runFastRefresh = useCallback(async () => {
-    setEtlRunning(true);
-    setEtlMessage('Đang cập nhật dữ liệu real-time...');
-    try {
-      await axios.post(`${DM_API}/etl/fast-refresh`);
-      setEtlMessage('Cập nhật dữ liệu thành công!');
-      loadDwHealth();
-    } catch {
-      setEtlMessage('Lỗi cập nhật dữ liệu');
-    } finally {
-      setEtlRunning(false);
-      setTimeout(() => setEtlMessage(null), 5000);
-    }
-  }, [loadDwHealth]);
-
   useEffect(() => {
     loadDwHealth();
     loadDataSources();
@@ -204,8 +188,6 @@ function DataManagementContent() {
       })
       .catch(() => { /* giữ nguyên fallback list */ });
   }, [loadDwHealth, loadDataSources]);
-
-  // ── Handlers ───────────────────────────────────────────────
 
   // ── Handlers ───────────────────────────────────────────────
 
@@ -259,6 +241,8 @@ function DataManagementContent() {
     }
     setCsvUploading(true);
     setLoadResult(null);
+    setRefreshProgress(null);
+    setLoadingPhase('Đang nạp dữ liệu vào Data Warehouse...');
 
     const formData = new FormData();
     formData.append('file', csvFile);
@@ -266,20 +250,39 @@ function DataManagementContent() {
     formData.append('column_mapping', JSON.stringify(columnMapping));
 
     try {
-      const res = await axios.post(`${DM_API}/csv-transform-load`, formData);
-      let msg = `Thành công! ${res.data.rows_processed} dòng xử lý, ${res.data.rows_affected} dòng được nạp vào ${targetTable}.`;
+      setLoadingPhase('Đang ghi dữ liệu vào bảng DW và cập nhật aggregate tables...');
+      const res = await axios.post(`${DM_API}/csv-transform-load`, formData, { timeout: 300000 });
+      setLoadingPhase('');
+      setCsvUploading(false);
+
+      let msg = `Thành công! ${res.data.rows_processed} dòng xử lý, ${res.data.rows_affected} dòng được nạp vào ${targetTable}. DW đã được cập nhật ngay lập tức.`;
       if (res.data.skipped_duplicate_ids?.length > 0) {
         const ids = res.data.skipped_duplicate_ids.slice(0, 30).join(', ');
         const more = res.data.skipped_duplicate_ids.length > 30 ? ` ... và ${res.data.skipped_duplicate_ids.length - 30} ID khác` : '';
         msg += `\nBỏ qua ${res.data.skipped_duplicate_ids.length} đối tượng đã tồn tại (PK trùng): ${ids}${more}`;
       }
       setLoadResult(msg);
-      loadDwHealth();
-      runFastRefresh();
+
+      // Start polling background refresh progress
+      setRefreshProgress({ running: true, percent: 0, step: 'Khởi động cập nhật nền...', error: null });
+      if (refreshPollRef.current) clearInterval(refreshPollRef.current);
+      refreshPollRef.current = setInterval(async () => {
+        try {
+          const pRes = await axios.get(`${DM_API}/ingest-refresh-status`);
+          const data = pRes.data;
+          setRefreshProgress({ running: data.running, percent: data.percent, step: data.step, error: data.error });
+          if (!data.running) {
+            if (refreshPollRef.current) clearInterval(refreshPollRef.current);
+            loadDwHealth();
+          }
+        } catch {
+          // ignore polling errors
+        }
+      }, 1500);
     } catch (err: any) {
       setLoadResult(`Lỗi: ${err.response?.data?.detail || err.message}`);
-    } finally {
       setCsvUploading(false);
+      setLoadingPhase('');
     }
   };
 
@@ -294,6 +297,13 @@ function DataManagementContent() {
     }
     setColumnMapping(autoMap);
   }, [targetTable, csvPreview]);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (refreshPollRef.current) clearInterval(refreshPollRef.current);
+    };
+  }, []);
 
   const handleExportTemplate = async () => {
     if (!exportTable) return;
@@ -356,17 +366,15 @@ function DataManagementContent() {
               Nạp dữ liệu CSV &bull; Nguồn dữ liệu &bull; Sức khỏe Data Warehouse
             </p>
           </div>
-          {/* ETL status toast */}
-          {etlMessage && (
-            <div className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium ${
-              etlRunning ? 'bg-blue-50 text-blue-700 border border-blue-200' :
-              etlMessage.includes('thành công') ? 'bg-green-50 text-green-700 border border-green-200' :
-              'bg-red-50 text-red-700 border border-red-200'
-            }`}>
-              {etlRunning && <RefreshCw size={14} className="animate-spin" />}
-              {etlMessage}
-            </div>
-          )}
+          {/* DW health refresh button */}
+          <button
+            onClick={loadDwHealth}
+            disabled={healthLoading}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-indigo-600 border border-indigo-200 hover:bg-indigo-50 transition-colors"
+          >
+            <RefreshCw size={14} className={healthLoading ? 'animate-spin' : ''} />
+            Làm mới
+          </button>
         </div>
 
         {/* ── Tab Navigation ─────────────────────────────────── */}
@@ -648,17 +656,56 @@ function DataManagementContent() {
                       }`}
                     >
                       {csvUploading ? (
-                        <><RefreshCw size={18} className="animate-spin" /> Đang nạp...</>
+                        <><RefreshCw size={18} className="animate-spin" /> {loadingPhase || 'Đang nạp và cập nhật DW...'}</>
                       ) : (
                         <><Upload size={18} /> Nạp dữ liệu vào DW</>
                       )}
                     </button>
+
+                    {csvUploading && (
+                      <div className="mt-2 p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-700 flex items-center gap-2">
+                        <RefreshCw size={14} className="animate-spin flex-shrink-0" />
+                        <span>
+                          {loadingPhase || 'Đang xử lý...'} — Vui lòng chờ, quá trình này có thể mất vài giây để cập nhật toàn bộ Data Warehouse.
+                        </span>
+                      </div>
+                    )}
 
                     {loadResult && (
                       <div className={`mt-3 p-3 rounded-lg text-sm ${
                         loadResult.startsWith('Thành công') ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'
                       }`}>
                         {loadResult}
+                      </div>
+                    )}
+
+                    {/* Background refresh progress bar */}
+                    {refreshProgress && (
+                      <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm font-semibold text-blue-800">
+                            {refreshProgress.running ? 'Đang cập nhật dữ liệu...' : (refreshProgress.error ? 'Có lỗi trong quá trình cập nhật' : 'Cập nhật hoàn tất!')}
+                          </span>
+                          <span className="text-sm font-bold text-blue-700">{refreshProgress.percent}%</span>
+                        </div>
+                        <div className="w-full bg-blue-200 rounded-full h-2.5 mb-2">
+                          <div
+                            className={`h-2.5 rounded-full transition-all duration-500 ${
+                              refreshProgress.error ? 'bg-red-500' :
+                              refreshProgress.percent === 100 ? 'bg-green-500' : 'bg-blue-500'
+                            }`}
+                            style={{ width: `${refreshProgress.percent}%` }}
+                          />
+                        </div>
+                        <p className="text-xs text-blue-600 truncate">{refreshProgress.step}</p>
+                        {refreshProgress.error && (
+                          <p className="text-xs text-red-600 mt-1">{refreshProgress.error}</p>
+                        )}
+                        {!refreshProgress.running && !refreshProgress.error && refreshProgress.percent === 100 && (
+                          <p className="text-xs text-green-700 mt-1 font-medium">
+                            Tất cả chỉ số và biểu đồ đã được cập nhật. Làm mới trang để thấy dữ liệu mới nhất.
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>

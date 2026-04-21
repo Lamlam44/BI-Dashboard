@@ -49,19 +49,31 @@ def _get_ingest_engine():
     )
     return create_engine(url, poolclass=NullPool, connect_args={"connect_timeout": 10})
 
-# ── Poll interval constants ───────────────────────────────────
-DW_POLL_INTERVAL: int = 15   # background thread refreshes every 15 seconds
-
 # =============================================================
 # Global Singleton Snapshot
 # =============================================================
 # One dict holding the latest metrics for every realtime endpoint.
-# Updated by ONE background thread; ALL clients read from it.
+# Updated by event-driven triggers (ingest / CSV upload); read by SSE clients.
 _SNAPSHOT: Dict[str, Any] = {}
 _SNAPSHOT_TS: float = 0.0
 _SNAPSHOT_LOCK = threading.Lock()
-_POLLER_STARTED = False
-_POLLER_LOCK = threading.Lock()
+
+# ── Charts-refresh version counter ───────────────────────────
+# Incremented each time a full data rebuild completes (CSV upload or invoice
+# background processing).  The SSE stream embeds this value so the frontend
+# can detect the change and trigger a global chart re-fetch.
+_CHARTS_VERSION: int = 0
+_CHARTS_VERSION_LOCK = threading.Lock()
+
+
+def notify_charts_refreshed() -> None:
+    """Increment charts_version in the snapshot so SSE clients know to re-fetch."""
+    global _CHARTS_VERSION
+    with _CHARTS_VERSION_LOCK:
+        _CHARTS_VERSION += 1
+        cv = _CHARTS_VERSION
+    _update_snapshot({"charts_version": cv})
+    logger.info("notify_charts_refreshed: charts_version=%d", cv)
 
 
 def _get_snapshot_key(key: str) -> Optional[Any]:
@@ -424,25 +436,6 @@ def _poll_dw_once() -> None:
         logger.warning("Realtime DW poll failed: %s", exc)
 
 
-def _start_dw_poller() -> None:
-    """Start the singleton background poller (idempotent - only one thread runs)."""
-    global _POLLER_STARTED
-    with _POLLER_LOCK:
-        if _POLLER_STARTED:
-            return
-        _POLLER_STARTED = True
-
-    def _loop():
-        # Initial poll immediately so first SSE client gets data right away.
-        _poll_dw_once()
-        while True:
-            time.sleep(DW_POLL_INTERVAL)
-            _poll_dw_once()
-
-    threading.Thread(target=_loop, daemon=True, name="realtime-dw-poller").start()
-    logger.info("Realtime DW poller started (interval=%ds)", DW_POLL_INTERVAL)
-
-
 # =============================================================
 # SSE Generator - reads ONLY from singleton (no DB hit per client)
 # =============================================================
@@ -452,6 +445,8 @@ async def _sse_generator():
 
     Sends an update whenever the DW snapshot is refreshed, or every 30 s
     as a keepalive so the connection stays alive through proxies.
+    The payload always includes ``charts_version`` so the frontend can
+    detect when a full data rebuild has completed and trigger a re-fetch.
     """
     last_sent_ts: float = 0.0
     FORCE_REFRESH_SEC = 30
@@ -461,13 +456,14 @@ async def _sse_generator():
             with _SNAPSHOT_LOCK:
                 current_ts = _SNAPSHOT_TS
                 summary = _SNAPSHOT.get("summary")
+                charts_version = _SNAPSHOT.get("charts_version", 0)
 
             if summary and (
                 current_ts > last_sent_ts
                 or time.time() - last_sent_ts >= FORCE_REFRESH_SEC
             ):
                 last_sent_ts = current_ts
-                payload = json.dumps(_serialize(summary))
+                payload = json.dumps(_serialize({**summary, "charts_version": charts_version}))
                 yield f"data: {payload}\n\n"
             else:
                 yield ": keepalive\n\n"
@@ -483,8 +479,9 @@ async def _sse_generator():
 
 router = APIRouter(prefix="", tags=["realtime"])
 
-# Start the background DW poller when this module is imported.
-_start_dw_poller()
+# Populate the snapshot once at startup so SSE clients get data on first connect.
+# Further updates are triggered by ingest and CSV/Excel upload events (event-driven).
+threading.Thread(target=_poll_dw_once, daemon=True, name="realtime-initial-poll").start()
 
 
 @router.get("/summary")
@@ -732,13 +729,128 @@ def ingest_invoices(
                     inserted_online = len(online_rows)
 
             # Refresh summary + snapshot in background (non-blocking)
-            threading.Thread(
-                target=lambda: (
-                    _refresh_summary_after_ingest(engine),
-                    _poll_dw_once(),
-                ),
-                daemon=True,
-            ).start()
+            def _bg_post_ingest():
+                # ── Capture watermarks BEFORE refresh so we know the delta ──
+                try:
+                    with engine.connect() as _c:
+                        _wm_sales = int(_c.execute(text(
+                            "SELECT COALESCE((SELECT last_key FROM _summary_watermarks "
+                            "WHERE source_table='FactSales'), 0)"
+                        )).scalar() or 0)
+                        _wm_online = int(_c.execute(text(
+                            "SELECT COALESCE((SELECT last_key FROM _summary_watermarks "
+                            "WHERE source_table='FactOnlineSales'), 0)"
+                        )).scalar() or 0)
+                except Exception:
+                    _wm_sales = _wm_online = 0
+
+                # 1. Update summary_daily_sales (incremental)
+                _refresh_summary_after_ingest(engine)
+
+                # 2. Incremental update agg_store_monthly_sales for new FactSales rows
+                try:
+                    with engine.begin() as _c:
+                        _c.execute(text(f"""
+                            INSERT INTO agg_store_monthly_sales
+                                (store_key, calendar_year, month_number,
+                                 total_sales_amount, total_sales_quantity,
+                                 total_discount_amount, order_count)
+                            SELECT
+                                COALESCE(StoreKey, 0), YEAR(DateKey), MONTH(DateKey),
+                                SUM(SalesAmount), SUM(SalesQuantity),
+                                SUM(COALESCE(DiscountAmount, 0)), COUNT(*)
+                            FROM FactSales
+                            WHERE SalesKey > :wm
+                            GROUP BY COALESCE(StoreKey, 0), YEAR(DateKey), MONTH(DateKey)
+                            ON DUPLICATE KEY UPDATE
+                                total_sales_amount    = total_sales_amount    + VALUES(total_sales_amount),
+                                total_sales_quantity  = total_sales_quantity  + VALUES(total_sales_quantity),
+                                total_discount_amount = total_discount_amount + VALUES(total_discount_amount),
+                                order_count           = order_count           + VALUES(order_count)
+                        """), {"wm": _wm_sales})
+                except Exception as _e:
+                    logger.warning("bg_post_ingest: agg_store_monthly_sales update failed: %s", _e)
+
+                # 3. Delta-update agg_kpi_summary
+                try:
+                    with engine.connect() as _c:
+                        _ds = _c.execute(text(
+                            "SELECT COUNT(*) AS cnt, COALESCE(SUM(SalesAmount),0) AS amt, "
+                            "COALESCE(SUM(TotalCost),0) AS cost, COALESCE(SUM(SalesQuantity),0) AS qty "
+                            "FROM FactSales WHERE SalesKey > :wm"
+                        ), {"wm": _wm_sales}).mappings().first()
+                        _do = _c.execute(text(
+                            "SELECT COUNT(*) AS cnt, COALESCE(SUM(SalesAmount),0) AS amt, "
+                            "COALESCE(SUM(TotalCost),0) AS cost, COALESCE(SUM(SalesQuantity),0) AS qty "
+                            "FROM FactOnlineSales WHERE OnlineSalesKey > :wm"
+                        ), {"wm": _wm_online}).mappings().first()
+                        _existing = {
+                            r["kpi_key"]: float(r["kpi_value"])
+                            for r in _c.execute(text("SELECT kpi_key, kpi_value FROM agg_kpi_summary")).mappings().all()
+                        }
+                    _total_cnt  = int(_ds["cnt"])   + int(_do["cnt"])
+                    _total_amt  = float(_ds["amt"])  + float(_do["amt"])
+                    _total_cost = float(_ds["cost"]) + float(_do["cost"])
+                    _total_qty  = float(_ds["qty"])  + float(_do["qty"])
+                    if _total_cnt > 0:
+                        _new_cnt  = _existing.get("total_transactions", 0) + _total_cnt
+                        _new_amt  = _existing.get("total_revenue", 0) + _total_amt
+                        _prev_cost = (_existing.get("total_revenue", 0)
+                                      * (1 - _existing.get("gross_margin", 0) / 100)
+                                      if _existing.get("total_revenue", 0) > 0 else 0)
+                        _new_cost = _prev_cost + _total_cost
+                        _new_qty  = (_existing.get("avg_basket_size", 0)
+                                     * _existing.get("total_transactions", 1) + _total_qty)
+                        with engine.begin() as _c:
+                            _c.execute(text("""
+                                REPLACE INTO agg_kpi_summary
+                                    (kpi_key, kpi_label, kpi_value, kpi_unit, period)
+                                VALUES
+                                  ('total_revenue',        'Total Revenue',             :rev,    'USD',   'ALL'),
+                                  ('total_transactions',   'Total Transactions',        :cnt,    'count', 'ALL'),
+                                  ('avg_transaction_value','Average Transaction Value', :avg_rv, 'USD',   'ALL'),
+                                  ('avg_basket_size',      'Average Basket Size',       :avg_bs, 'units', 'ALL'),
+                                  ('gross_margin',         'Gross Profit Margin',       :margin, 'pct',   'ALL')
+                            """), {
+                                "rev":    _new_amt,
+                                "cnt":    _new_cnt,
+                                "avg_rv": _new_amt / _new_cnt if _new_cnt else 0,
+                                "avg_bs": _new_qty / _new_cnt if _new_cnt else 0,
+                                "margin": (_new_amt - _new_cost) / _new_amt * 100 if _new_amt else 0,
+                            })
+                except Exception as _e:
+                    logger.warning("bg_post_ingest: agg_kpi_summary update failed: %s", _e)
+
+                # 4. Micro-refresh sale_profit parquet — update only today's rows using
+                #    PyArrow incremental append instead of rebuilding the full snapshot.
+                try:
+                    from datetime import date as _date
+                    from modules.sale_profit.service import clear_all_caches, micro_refresh_parquet
+                    clear_all_caches()
+                    micro_refresh_parquet(date_keys=[_date.today().isoformat()])
+                except Exception:
+                    pass
+
+                # 5. Clear employee-performance + analytics TTL caches
+                try:
+                    from modules.employee_performance.service import clear_all_caches as _ep_clear
+                    _ep_clear()
+                except Exception:
+                    pass
+                try:
+                    from modules.data_management.analytics import clear_all_caches as _an_clear
+                    _an_clear()
+                except Exception:
+                    pass
+
+                # 6. Refresh realtime SSE snapshot
+                _poll_dw_once()
+
+                # 7. Signal frontend to re-fetch all charts
+                notify_charts_refreshed()
+                logger.info("bg_post_ingest: complete — charts_version bumped")
+
+            threading.Thread(target=_bg_post_ingest, daemon=True).start()
             break  # success — exit retry loop
 
         except Exception as exc:
@@ -781,16 +893,23 @@ def _refresh_summary_after_ingest(engine) -> None:
 
             if int(max_sales) > int(wm_sales):
                 conn.execute(text("""
-                    REPLACE INTO summary_daily_sales
+                    INSERT INTO summary_daily_sales
                         (DateKey, StoreKey, ProductKey, PromotionKey,
                          total_sales_quantity, total_sales_amount,
-                         total_return_amount, total_discount_amount)
+                         total_return_amount, total_discount_amount, total_cost)
                     SELECT
                         DATE(DateKey), COALESCE(StoreKey, 0), ProductKey, COALESCE(PromotionKey, 0),
                         SUM(SalesQuantity), SUM(SalesAmount),
-                        SUM(COALESCE(ReturnAmount, 0)), SUM(COALESCE(DiscountAmount, 0))
+                        SUM(COALESCE(ReturnAmount, 0)), SUM(COALESCE(DiscountAmount, 0)),
+                        SUM(COALESCE(TotalCost, 0))
                     FROM FactSales WHERE SalesKey > :wm
                     GROUP BY DATE(DateKey), COALESCE(StoreKey, 0), ProductKey, COALESCE(PromotionKey, 0)
+                    ON DUPLICATE KEY UPDATE
+                        total_sales_quantity  = total_sales_quantity  + VALUES(total_sales_quantity),
+                        total_sales_amount    = total_sales_amount    + VALUES(total_sales_amount),
+                        total_return_amount   = total_return_amount   + VALUES(total_return_amount),
+                        total_discount_amount = total_discount_amount + VALUES(total_discount_amount),
+                        total_cost            = total_cost            + VALUES(total_cost)
                 """), {"wm": int(wm_sales)})
                 conn.execute(text("""
                     INSERT INTO _summary_watermarks (source_table, last_key) VALUES ('FactSales', :v)
@@ -799,16 +918,23 @@ def _refresh_summary_after_ingest(engine) -> None:
 
             if int(max_online) > int(wm_online):
                 conn.execute(text("""
-                    REPLACE INTO summary_daily_sales
+                    INSERT INTO summary_daily_sales
                         (DateKey, StoreKey, ProductKey, PromotionKey,
                          total_sales_quantity, total_sales_amount,
-                         total_return_amount, total_discount_amount)
+                         total_return_amount, total_discount_amount, total_cost)
                     SELECT
                         DATE(DateKey), COALESCE(StoreKey, 0), ProductKey, COALESCE(PromotionKey, 0),
                         SUM(SalesQuantity), SUM(SalesAmount),
-                        SUM(COALESCE(ReturnAmount, 0)), SUM(COALESCE(DiscountAmount, 0))
+                        SUM(COALESCE(ReturnAmount, 0)), SUM(COALESCE(DiscountAmount, 0)),
+                        SUM(COALESCE(TotalCost, 0))
                     FROM FactOnlineSales WHERE OnlineSalesKey > :wm
                     GROUP BY DATE(DateKey), COALESCE(StoreKey, 0), ProductKey, COALESCE(PromotionKey, 0)
+                    ON DUPLICATE KEY UPDATE
+                        total_sales_quantity  = total_sales_quantity  + VALUES(total_sales_quantity),
+                        total_sales_amount    = total_sales_amount    + VALUES(total_sales_amount),
+                        total_return_amount   = total_return_amount   + VALUES(total_return_amount),
+                        total_discount_amount = total_discount_amount + VALUES(total_discount_amount),
+                        total_cost            = total_cost            + VALUES(total_cost)
                 """), {"wm": int(wm_online)})
                 conn.execute(text("""
                     INSERT INTO _summary_watermarks (source_table, last_key) VALUES ('FactOnlineSales', :v)

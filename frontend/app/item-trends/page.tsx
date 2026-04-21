@@ -7,6 +7,7 @@ import ExportPDFButton from '../components/ExportPDFButton';
 import DashboardLayout from '../components/DashboardLayout';
 import Section from '../components/Section';
 import { useAuth } from '../store/useAuth';
+import { useRefresh } from '../components/RefreshProvider';
 
 import StatsCards from './components/StatsCards';
 import CustomerChart from './components/CustomerChart';
@@ -24,6 +25,7 @@ const ALLOWED_ROLES = allowedRoles('/item-trends');
 const ItemTrends = () => {
   const router = useRouter();
   const { user } = useAuth();
+  const { refreshTick } = useRefresh();
   const isStoreManager = user?.role === 'store_manager';
 
   useEffect(() => {
@@ -81,6 +83,9 @@ const ItemTrends = () => {
           />
         </div>
 
+        {/* refreshTick is used as key so all child charts re-fetch when backend
+            signals a data rebuild via the SSE charts_version field. */}
+
         {/* FILTER + YEAR ANALYSIS — hidden for store_manager */}
         {!isStoreManager && (
         <Section title="📅 Phân tích theo Năm" badge="🔗 Lọc theo năm đã chọn">
@@ -93,12 +98,12 @@ const ItemTrends = () => {
             </select>
             <button onClick={handleApplyFilter} className="bg-blue-600 text-white px-4 py-2 rounded">Áp dụng</button>
           </div>
-          <StatsCards selectedYear={appliedYear} />
+          <StatsCards key={`stats-${refreshTick}`} selectedYear={appliedYear} />
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <TrendingProductsChart selectedYear={appliedYear} />
-            <PromotionImpactChart selectedYear={appliedYear} />
+            <TrendingProductsChart key={`trending-${refreshTick}`} selectedYear={appliedYear} />
+            <PromotionImpactChart key={`promo-${refreshTick}`} selectedYear={appliedYear} />
           </div>
-          <LocationChart selectedYear={appliedYear} />
+          <LocationChart key={`location-${refreshTick}`} selectedYear={appliedYear} />
         </Section>
         )}
 
@@ -107,10 +112,10 @@ const ItemTrends = () => {
           title={isStoreManager ? '📦 Quản lý Tồn kho Cửa hàng' : '📊 Phân tích Tổng hợp'}
           badge={isStoreManager ? 'Safety Stock & Stockout' : '⚠ Toàn thời gian — Không áp dụng bộ lọc năm'}
         >
-          {!isStoreManager && <CustomerChart selectedYear="ALL" />}
-          {!isStoreManager && <RfmSegmentsChart />}
-          {!isStoreManager && <ProductPerformanceChart />}
-          <InventoryMetricsChart />
+          {!isStoreManager && <CustomerChart key={`customer-${refreshTick}`} selectedYear="ALL" />}
+          {!isStoreManager && <RfmSegmentsChart key={`rfm-${refreshTick}`} />}
+          {!isStoreManager && <ProductPerformanceChart key={`product-${refreshTick}`} />}
+          <InventoryMetricsChart key={`inventory-${refreshTick}`} />
         </Section>
 
       </div>

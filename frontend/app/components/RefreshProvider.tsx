@@ -25,6 +25,9 @@ export interface RealtimeSummary {
   mtd_orders: number;
   last_updated: string | null;
   metric_date: string;
+  /** Incremented by the backend each time a full data rebuild completes.
+   *  When this changes the frontend bumps refreshTick so all charts re-fetch. */
+  charts_version?: number;
 }
 
 interface RefreshContextValue {
@@ -68,6 +71,9 @@ export default function RefreshProvider({ children }: { children: React.ReactNod
   const [realtimeSummary, setRealtimeSummary] = useState<RealtimeSummary | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Track last seen charts_version to detect backend-driven rebuild completions.
+  // Start at -1 so that the very first SSE message sets the baseline without bumping tick.
+  const prevChartsVersionRef = useRef<number>(-1);
 
   // Load saved interval from localStorage on mount
   useEffect(() => {
@@ -119,6 +125,19 @@ export default function RefreshProvider({ children }: { children: React.ReactNod
           const data = JSON.parse(event.data) as RealtimeSummary;
           if (data && data.today_revenue !== undefined) {
             setRealtimeSummary(data);
+
+            // Detect backend-driven rebuild: bump refreshTick when charts_version
+            // increments.  On the very first SSE message we just record the
+            // baseline (prevRef === -1) without triggering a redundant re-fetch,
+            // because all pages already fetch on mount.
+            const cv = data.charts_version ?? 0;
+            if (prevChartsVersionRef.current === -1) {
+              // First message — set baseline, do NOT bump tick
+              prevChartsVersionRef.current = cv;
+            } else if (cv > prevChartsVersionRef.current) {
+              prevChartsVersionRef.current = cv;
+              setRefreshTick((t) => t + 1);
+            }
           }
         } catch { /* ignore parse errors */ }
       };

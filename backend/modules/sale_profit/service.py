@@ -472,6 +472,132 @@ def refresh_sales_profit_cache() -> Dict[str, Any]:
     }
 
 
+def micro_refresh_parquet(date_keys: Optional[List[str]] = None) -> pd.DataFrame:
+    """Fast incremental parquet update using PyArrow — for Micro-ETL after invoice ingest.
+
+    Instead of rebuilding the full snapshot from the DB, this function:
+      1. Loads the existing parquet with PyArrow (fast columnar I/O).
+      2. Removes rows whose DateKey falls in *date_keys* (those need fresh values).
+      3. Queries ONLY those dates from summary_daily_sales (tiny result set).
+      4. Combines the filtered base with the fresh delta.
+      5. Writes back using PyArrow/Snappy (faster than pandas for large files).
+
+    Falls back to a full rebuild when the parquet doesn't exist yet or date_keys is empty.
+    """
+    import pyarrow as pa  # noqa: F401 — already in requirements.txt
+    import pyarrow.parquet as pq
+
+    if not date_keys or not _parquet_has_data():
+        return _build_sales_profit_snapshot()
+
+    # If full rebuild is already running, skip rather than race.
+    if _BUILD_LOCK.locked():
+        try:
+            return pd.read_parquet(SALES_PROFIT_SNAPSHOT)
+        except Exception:
+            return pd.DataFrame()
+
+    if not _BUILD_LOCK.acquire(blocking=False):
+        try:
+            return pd.read_parquet(SALES_PROFIT_SNAPSHOT)
+        except Exception:
+            return pd.DataFrame()
+
+    started_at = time.perf_counter()
+    try:
+        # ── Step 1: load existing parquet with PyArrow ──────────────────
+        existing_table = pq.read_table(str(SALES_PROFIT_SNAPSHOT))
+        existing_df = existing_table.to_pandas()
+
+        if "Date" not in existing_df.columns:
+            existing_df["Date"] = _parse_dates(existing_df["DateKey"])
+
+        # Normalise supplied date_keys → datetime.date for comparison.
+        date_set = set()
+        for dk in date_keys:
+            try:
+                date_set.add(pd.to_datetime(dk).date())
+            except Exception:
+                pass
+
+        if not date_set:
+            return existing_df
+
+        # ── Step 2: keep rows that are NOT in the refresh window ─────────
+        base_df = existing_df[~existing_df["Date"].dt.date.isin(date_set)].copy()
+
+        # ── Step 3: query only the affected dates from DB ────────────────
+        engine = get_engine()
+        # Use parameterised IN via a CTE-style UNION to avoid injection risk.
+        date_filter_union = " UNION ALL ".join(
+            f"SELECT CAST('{d}' AS DATE) AS d" for d in sorted(date_set)
+        )
+        query = text(f"""
+            SELECT
+                s.DateKey                   AS DateKey,
+                CAST(s.StoreKey AS SIGNED)  AS StoreKey,
+                COALESCE(ds.StoreName, CONCAT('Store ', s.StoreKey)) AS StoreName,
+                SUM(s.total_sales_amount
+                  - COALESCE(s.total_return_amount, 0)
+                  - COALESCE(s.total_discount_amount, 0)) AS total_sales,
+                SUM(COALESCE(s.total_cost, 0))            AS total_cost,
+                SUM(s.total_sales_amount
+                  - COALESCE(s.total_return_amount, 0)
+                  - COALESCE(s.total_discount_amount, 0))
+                  - SUM(COALESCE(s.total_cost, 0))        AS gross_profit,
+                CASE
+                    WHEN SUM(s.total_sales_amount
+                         - COALESCE(s.total_return_amount, 0)
+                         - COALESCE(s.total_discount_amount, 0)) = 0 THEN 0
+                    ELSE (SUM(s.total_sales_amount
+                          - COALESCE(s.total_return_amount, 0)
+                          - COALESCE(s.total_discount_amount, 0))
+                          - SUM(COALESCE(s.total_cost, 0)))
+                         / SUM(s.total_sales_amount
+                            - COALESCE(s.total_return_amount, 0)
+                            - COALESCE(s.total_discount_amount, 0))
+                END AS profit_margin
+            FROM summary_daily_sales s
+            JOIN ({date_filter_union}) _dates ON DATE(s.DateKey) = _dates.d
+            LEFT JOIN DimStore ds ON ds.StoreKey = s.StoreKey
+            GROUP BY s.DateKey, s.StoreKey, StoreName
+            ORDER BY s.DateKey
+        """)
+
+        with engine.connect() as conn:
+            delta_df = pd.read_sql(query, conn)
+
+        if delta_df.empty:
+            logger.info("micro_refresh_parquet: no delta rows for %s", date_keys)
+            return existing_df
+
+        delta_df["Date"] = _parse_dates(delta_df["DateKey"])
+        delta_df = delta_df.dropna(subset=["Date"])
+
+        # ── Step 4: combine base + delta ─────────────────────────────────
+        combined_df = pd.concat([base_df, delta_df], ignore_index=True)
+        combined_df = combined_df.sort_values("Date").reset_index(drop=True)
+
+        # ── Step 5: write back with PyArrow/Snappy ───────────────────────
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        out_table = pa.Table.from_pandas(combined_df, preserve_index=False)
+        pq.write_table(out_table, str(SALES_PROFIT_SNAPSHOT), compression="snappy")
+
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        logger.info(
+            "micro_refresh_parquet: wrote %d rows (delta %d rows for %s) in %.1f ms",
+            len(combined_df), len(delta_df), date_keys, elapsed_ms,
+        )
+        _simple_cache_set("sales_profit_snapshot", combined_df)
+        return combined_df
+
+    except Exception as exc:
+        logger.warning("micro_refresh_parquet failed (%s); falling back to full rebuild", exc)
+        return _build_sales_profit_snapshot()
+    finally:
+        _BUILD_LOCK.release()
+
+
 def get_sales_per_sqft(
     start_date=None,
     end_date=None,

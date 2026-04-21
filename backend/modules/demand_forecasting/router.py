@@ -92,6 +92,7 @@ def initialize_forecasting_assets(force_reload: bool = False):
 
         init_started = True
         init_error = None
+        _model_file_existed = False
 
         try:
             logger.info("Starting up - Loading forecast model...")
@@ -99,18 +100,50 @@ def initialize_forecasting_assets(force_reload: bool = False):
             model_path = Path(__file__).parent / "saved_models" / "global_demand_model.pkl"
             try:
                 model = DemandForecastingModel.load(str(model_path))
-                logger.info(f"âœ… Global Model loaded successfully from {model_path}.")
+                _model_file_existed = True
+                logger.info(f"Global Model loaded successfully from {model_path}.")
             except Exception as model_error:
                 model = DemandForecastingModel()
                 logger.warning(
-                    f"âš ï¸ Could not load Global Model from {model_path}, it will run in On-Demand mode: {model_error}"
+                    f"Could not load Global Model from {model_path}, running in On-Demand mode: {model_error}"
                 )
 
             # Build parquet snapshots in background-friendly path to avoid heavy raw loads at runtime.
             ensure_parquet_cache(force_refresh=force_reload)
+
+            # If no pre-trained model was found, auto-train in background so deep-dive works without manual trigger.
+            if not _model_file_existed:
+                _start_auto_train()
         except Exception as e:
             init_error = str(e)
             logger.error(f"Error during startup: {e}")
+
+
+def _start_auto_train():
+    """Trigger model training in background when no pre-trained model exists."""
+    global _recalculate_running
+
+    if _recalculate_running:
+        return
+
+    def _worker():
+        global model, _recalculate_running
+        _recalculate_running = True
+        try:
+            logger.info("No saved model found - starting automatic background training...")
+            train_global_model()
+            model_path = Path(__file__).parent / "saved_models" / "global_demand_model.pkl"
+            with _init_lock:
+                loaded = DemandForecastingModel.load(str(model_path))
+                model = loaded
+            logger.info("Auto-training complete, model loaded successfully.")
+        except Exception as e:
+            logger.error(f"Auto-training failed: {e}")
+        finally:
+            _recalculate_running = False
+
+    threading.Thread(target=_worker, daemon=True).start()
+    logger.info("Auto-training background thread started.")
 
 
 def _start_background_initialization():
@@ -153,7 +186,8 @@ def ensure_cache_ready():
     )
 
 
-logger.info("Forecast startup deferred; initialization will run lazily.")
+_start_background_initialization()
+logger.info("Forecast startup: background initialization started automatically.")
 
 
 def ensure_initialized():

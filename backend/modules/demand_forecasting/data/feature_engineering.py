@@ -140,9 +140,9 @@ def create_calendar_features(
 
         # IsHoliday from DimDate table
         try:
-            from modules.demand_forecasting.data.data_loader import _get_engine
+            from core.database import get_engine
             from sqlalchemy import text as sa_text
-            engine = _get_engine()
+            engine = get_engine()
             with engine.connect() as conn:
                 holidays = pd.read_sql(
                     sa_text("SELECT DateKey, IsHoliday FROM DimDate WHERE IsHoliday IS NOT NULL"),

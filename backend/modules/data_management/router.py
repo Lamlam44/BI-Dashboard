@@ -1,4 +1,4 @@
-﻿import logging
+import logging
 import re
 import threading
 import time
@@ -26,6 +26,33 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="", tags=["data-management"])
 router.include_router(analytics_router)
+
+# ── Ingest background-refresh progress tracker ────────────────
+# Updated by _post_ingest_sync() / _heavy_bg() so the frontend
+# can poll /data/ingest-refresh-status and show a live progress bar.
+_INGEST_REFRESH_STATUS: Dict[str, Any] = {
+    "running": False,
+    "percent": 0,
+    "step": "idle",
+    "last_completed": None,
+    "error": None,
+}
+_INGEST_STATUS_LOCK = threading.Lock()
+
+
+def _update_refresh_status(
+    percent: int,
+    step: str,
+    running: bool = True,
+    error: Optional[str] = None,
+) -> None:
+    with _INGEST_STATUS_LOCK:
+        _INGEST_REFRESH_STATUS["running"] = running
+        _INGEST_REFRESH_STATUS["percent"] = percent
+        _INGEST_REFRESH_STATUS["step"] = step
+        _INGEST_REFRESH_STATUS["error"] = error
+        if not running:
+            _INGEST_REFRESH_STATUS["last_completed"] = datetime.utcnow().isoformat()
 
 
 def _refresh_summary_and_cache() -> None:
@@ -58,7 +85,7 @@ def _refresh_summary_and_cache() -> None:
             # Incrementally aggregate only new rows from FactSales
             if int(max_sales) > int(wm_sales):
                 conn.execute(text("""
-                    REPLACE INTO summary_daily_sales
+                    INSERT INTO summary_daily_sales
                         (DateKey, StoreKey, ProductKey, PromotionKey,
                          total_sales_quantity, total_sales_amount,
                          total_return_amount, total_discount_amount, total_cost)
@@ -71,13 +98,19 @@ def _refresh_summary_and_cache() -> None:
                     FROM FactSales
                     WHERE SalesKey > :wm
                     GROUP BY DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0)
+                    ON DUPLICATE KEY UPDATE
+                        total_sales_quantity  = total_sales_quantity  + VALUES(total_sales_quantity),
+                        total_sales_amount    = total_sales_amount    + VALUES(total_sales_amount),
+                        total_return_amount   = total_return_amount   + VALUES(total_return_amount),
+                        total_discount_amount = total_discount_amount + VALUES(total_discount_amount),
+                        total_cost            = total_cost            + VALUES(total_cost)
                 """), {"wm": int(wm_sales)})
                 logger.info(f"summary_daily_sales: refreshed FactSales rows > {wm_sales}")
 
             # Incrementally aggregate only new rows from FactOnlineSales
             if int(max_online) > int(wm_online):
                 conn.execute(text("""
-                    REPLACE INTO summary_daily_sales
+                    INSERT INTO summary_daily_sales
                         (DateKey, StoreKey, ProductKey, PromotionKey,
                          total_sales_quantity, total_sales_amount,
                          total_return_amount, total_discount_amount, total_cost)
@@ -90,6 +123,12 @@ def _refresh_summary_and_cache() -> None:
                     FROM FactOnlineSales
                     WHERE OnlineSalesKey > :wm
                     GROUP BY DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0)
+                    ON DUPLICATE KEY UPDATE
+                        total_sales_quantity  = total_sales_quantity  + VALUES(total_sales_quantity),
+                        total_sales_amount    = total_sales_amount    + VALUES(total_sales_amount),
+                        total_return_amount   = total_return_amount   + VALUES(total_return_amount),
+                        total_discount_amount = total_discount_amount + VALUES(total_discount_amount),
+                        total_cost            = total_cost            + VALUES(total_cost)
                 """), {"wm": int(wm_online)})
                 logger.info(f"summary_daily_sales: refreshed FactOnlineSales rows > {wm_online}")
 
@@ -113,10 +152,19 @@ def _refresh_summary_and_cache() -> None:
                 month_number        INT NOT NULL,
                 total_sales_amount  DECIMAL(18,2) NOT NULL DEFAULT 0,
                 total_sales_quantity DECIMAL(14,2) NOT NULL DEFAULT 0,
+                total_discount_amount DECIMAL(18,2) NOT NULL DEFAULT 0,
                 order_count         INT NOT NULL DEFAULT 0,
                 PRIMARY KEY (store_key, calendar_year, month_number)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """))
+        # Add total_discount_amount column to existing tables that pre-date this change
+        try:
+            conn.execute(text(
+                "ALTER TABLE agg_store_monthly_sales "
+                "ADD COLUMN total_discount_amount DECIMAL(18,2) NOT NULL DEFAULT 0"
+            ))
+        except Exception:
+            pass  # column already exists
         if not _agg_store_monthly_sales_has_data(conn):
             _rebuild_agg_store_monthly_sales(conn)
         elif has_new and int(max_sales) > int(wm_sales):
@@ -139,10 +187,11 @@ def _rebuild_agg_store_monthly_sales(conn) -> None:
     conn.execute(text("""
         INSERT INTO agg_store_monthly_sales
             (store_key, calendar_year, month_number,
-             total_sales_amount, total_sales_quantity, order_count)
+             total_sales_amount, total_sales_quantity, total_discount_amount, order_count)
         SELECT
             StoreKey, YEAR(DateKey), MONTH(DateKey),
-            SUM(total_sales_amount), SUM(total_sales_quantity), COUNT(*)
+            SUM(total_sales_amount), SUM(total_sales_quantity),
+            SUM(COALESCE(total_discount_amount, 0)), COUNT(*)
         FROM summary_daily_sales
         GROUP BY StoreKey, YEAR(DateKey), MONTH(DateKey)
     """))
@@ -153,19 +202,36 @@ def _upsert_agg_store_monthly_sales_from_factsales(conn, sales_wm: int) -> None:
     conn.execute(text(f"""
         INSERT INTO agg_store_monthly_sales
             (store_key, calendar_year, month_number,
-             total_sales_amount, total_sales_quantity, order_count)
+             total_sales_amount, total_sales_quantity, total_discount_amount, order_count)
         SELECT
             COALESCE(StoreKey, 0), YEAR(DateKey), MONTH(DateKey),
-            SUM(SalesAmount), SUM(SalesQuantity), COUNT(*)
+            SUM(SalesAmount), SUM(SalesQuantity),
+            SUM(COALESCE(DiscountAmount, 0)), COUNT(*)
         FROM FactSales
         WHERE SalesKey > {sales_wm}
         GROUP BY COALESCE(StoreKey, 0), YEAR(DateKey), MONTH(DateKey)
         ON DUPLICATE KEY UPDATE
-            total_sales_amount   = total_sales_amount   + VALUES(total_sales_amount),
-            total_sales_quantity = total_sales_quantity + VALUES(total_sales_quantity),
-            order_count          = order_count          + VALUES(order_count)
+            total_sales_amount    = total_sales_amount    + VALUES(total_sales_amount),
+            total_sales_quantity  = total_sales_quantity  + VALUES(total_sales_quantity),
+            total_discount_amount = total_discount_amount + VALUES(total_discount_amount),
+            order_count           = order_count           + VALUES(order_count)
     """))
     logger.info(f"agg_store_monthly_sales updated (incremental, wm={sales_wm})")
+
+
+# ── Startup migration: ensure total_discount_amount column exists ────────────
+# Runs at module import time so all warmup queries (including employee_performance)
+# can reference the column immediately.
+try:
+    _startup_engine = get_engine()
+    with _startup_engine.begin() as _conn:
+        _conn.execute(text(
+            "ALTER TABLE agg_store_monthly_sales "
+            "ADD COLUMN total_discount_amount DECIMAL(18,2) NOT NULL DEFAULT 0"
+        ))
+    logger.info("agg_store_monthly_sales: total_discount_amount column added")
+except Exception:
+    pass  # column already exists or table not yet created — both are fine
 
 
 logger.info("Data Management startup ready.")
@@ -420,35 +486,72 @@ def get_template(table_name: str):
         headers=headers,
     )
 
-@router.post("/upload")
-async def upload_data(table_name: str = Form(...), file: UploadFile = File(...)):
+def _detect_table_from_columns(columns: list) -> Optional[str]:
+    """Auto-detect target table by matching uploaded column names against schema definitions.
+
+    Returns the best-matching table name, or None if no confident match is found.
+    A match is confident when all required (non-nullable, non-PK) columns of a table
+    are present in the uploaded file.
+    """
     schemas = load_schema()
-    if table_name not in schemas:
-        raise HTTPException(status_code=404, detail="Table not found")
-        
-    schema = schemas[table_name]
-    primary_keys = schema.get("primary_keys", [])
-    
+    upload_cols = {c.lower() for c in columns}
+    best_table: Optional[str] = None
+    best_score = 0
+    for table, info in schemas.items():
+        table_cols = {c["name"].lower() for c in info.get("columns", [])}
+        required = {
+            c["name"].lower() for c in info.get("columns", [])
+            if not c.get("nullable", True) and c["name"] not in info.get("primary_keys", [])
+        }
+        if not required:
+            required = table_cols
+        matched = required & upload_cols
+        if matched == required and len(matched) > best_score:
+            best_score = len(matched)
+            best_table = table
+    return best_table
+
+
+@router.post("/upload")
+async def upload_data(
+    file: UploadFile = File(...),
+    table_name: Optional[str] = Form(None),
+):
+    schemas = load_schema()
+
     contents = await file.read()
     if file.filename.endswith('.csv'):
         new_df = pd.read_csv(io.BytesIO(contents))
     else:
         new_df = pd.read_excel(io.BytesIO(contents))
-        
-    # Basic validation
-    expected_cols = [c["name"] for c in schema["columns"]]
-    missing_cols = [c for c in expected_cols if c not in new_df.columns]
-    if missing_cols:
-        raise HTTPException(status_code=400, detail=f"Missing columns: {missing_cols}")
-        
+
+    # Auto-detect table if not provided by client
+    detected_table = _detect_table_from_columns(list(new_df.columns))
+    resolved_table = table_name or detected_table
+
+    if resolved_table and resolved_table not in schemas:
+        resolved_table = None
+
+    schema = schemas.get(resolved_table, {}) if resolved_table else {}
+    primary_keys = schema.get("primary_keys", [])
+
+    # Basic validation only when table is known
+    missing_cols: list = []
+    if schema:
+        expected_cols = [c["name"] for c in schema.get("columns", [])]
+        missing_cols = [c for c in expected_cols if c not in new_df.columns]
+
     # Data Quality: Simple NaN check
     null_counts = new_df.isnull().sum().to_dict()
-    
+
     return {
         "message": "File parsed successfully",
         "preview": new_df.head(5).to_dict(orient="records"),
         "null_counts": null_counts,
-        "rows": len(new_df)
+        "rows": len(new_df),
+        "suggested_table": resolved_table,
+        "auto_detected": table_name is None and resolved_table is not None,
+        "missing_columns": missing_cols,
     }
 
 @router.post("/ingest")
@@ -536,7 +639,7 @@ async def ingest_data(table_name: str = Form(...), file: UploadFile = File(...))
     if table_name in DIM_TABLE_PKS:
         pk_col = DIM_TABLE_PKS[table_name]
         dim_result = _dim_insert_skip_duplicates(table_name, pk_col, rows)
-        threading.Thread(target=_post_ingest_refresh, daemon=True).start()
+        _post_ingest_sync()
         return {
             "message": (
                 f"Ingest DIM '{table_name}': "
@@ -551,7 +654,7 @@ async def ingest_data(table_name: str = Form(...), file: UploadFile = File(...))
 
     # ── FACT and other tables: UPSERT ────────────────────────────
     affected_rows = _bulk_upsert(table_name, rows, primary_keys)
-    threading.Thread(target=_post_ingest_refresh, daemon=True).start()
+    _post_ingest_sync()
     return {
         "message": f"Ingested into MySQL table '{table_name}'. Affected rows: {affected_rows}",
         "pk_auto_actions": pk_actions,
@@ -629,12 +732,258 @@ def _dim_insert_skip_duplicates(
     return {"inserted": inserted, "skipped_ids": skipped_ids}
 
 
-def _post_ingest_refresh() -> None:
-    """Background: fast-refresh KPIs + realtime snapshot after any data ingest."""
+def _post_ingest_sync() -> None:
+    """Synchronous post-ingest refresh — runs FAST operations in the request thread
+    so the response always reflects a consistent DW state, then offloads heavy
+    parquet / agg-table rebuilds to a background thread.
+
+    Synchronous (fast, < 5 s on local MySQL):
+      1. Incrementally update summary_daily_sales from new DW rows (watermarked).
+      2. Incrementally update agg_store_monthly_sales.
+      3. Delta-update agg_kpi_summary (no full v_total_sales scan).
+      4. Clear all in-memory TTL caches (sale_profit, employee_perf, analytics).
+
+    Background (non-blocking, uses existing agg tables — NEVER rebuilds from raw):
+      5. Rebuild sale_profit parquet cache from summary_daily_sales.
+      6. Incremental update agg_inventory_metrics, agg_product_performance,
+         agg_customer_rfm, agg_store_monthly_costs, agg_channel_summary via
+         run_etl() watermark logic.
+      7. Refresh item_trends customer segments cache.
+      8. Rebuild demand forecasting parquet cache (daily_sales_snapshot + abc_xyz).
+      9. Trigger realtime SSE snapshot refresh.
+    """
+    import time as _t
+    t0 = _t.perf_counter()
+
+    _update_refresh_status(0, "Bắt đầu cập nhật sau khi nạp dữ liệu...")
+
+    engine = get_engine()
+    new_sales  = False
+    new_online = False
+    wm_sales   = 0
+    wm_online  = 0
+
+    # ── Step 1: Incremental summary_daily_sales ─────────────────
     try:
-        etl_fast_refresh()
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS _summary_watermarks (
+                    source_table VARCHAR(64) PRIMARY KEY,
+                    last_key BIGINT NOT NULL DEFAULT 0
+                ) ENGINE=InnoDB
+            """))
+            wm_sales = conn.execute(text(
+                "SELECT COALESCE((SELECT last_key FROM _summary_watermarks WHERE source_table='FactSales'),0)"
+            )).scalar() or 0
+            wm_online = conn.execute(text(
+                "SELECT COALESCE((SELECT last_key FROM _summary_watermarks WHERE source_table='FactOnlineSales'),0)"
+            )).scalar() or 0
+            max_sales  = conn.execute(text("SELECT COALESCE(MAX(SalesKey),0) FROM FactSales")).scalar() or 0
+            max_online = conn.execute(text("SELECT COALESCE(MAX(OnlineSalesKey),0) FROM FactOnlineSales")).scalar() or 0
+
+            new_sales  = int(max_sales)  > int(wm_sales)
+            new_online = int(max_online) > int(wm_online)
+
+            if new_sales:
+                conn.execute(text("""
+                    INSERT INTO summary_daily_sales
+                        (DateKey, StoreKey, ProductKey, PromotionKey,
+                         total_sales_quantity, total_sales_amount,
+                         total_return_amount, total_discount_amount, total_cost)
+                    SELECT DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0),
+                           SUM(SalesQuantity), SUM(SalesAmount),
+                           SUM(COALESCE(ReturnAmount,0)), SUM(COALESCE(DiscountAmount,0)),
+                           SUM(COALESCE(TotalCost,0))
+                    FROM FactSales WHERE SalesKey > :wm
+                    GROUP BY DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0)
+                    ON DUPLICATE KEY UPDATE
+                        total_sales_quantity  = total_sales_quantity  + VALUES(total_sales_quantity),
+                        total_sales_amount    = total_sales_amount    + VALUES(total_sales_amount),
+                        total_return_amount   = total_return_amount   + VALUES(total_return_amount),
+                        total_discount_amount = total_discount_amount + VALUES(total_discount_amount),
+                        total_cost            = total_cost            + VALUES(total_cost)
+                """), {"wm": int(wm_sales)})
+                conn.execute(text("""
+                    INSERT INTO _summary_watermarks (source_table, last_key) VALUES ('FactSales', :v)
+                    ON DUPLICATE KEY UPDATE last_key = :v
+                """), {"v": int(max_sales)})
+
+            if new_online:
+                conn.execute(text("""
+                    INSERT INTO summary_daily_sales
+                        (DateKey, StoreKey, ProductKey, PromotionKey,
+                         total_sales_quantity, total_sales_amount,
+                         total_return_amount, total_discount_amount, total_cost)
+                    SELECT DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0),
+                           SUM(SalesQuantity), SUM(SalesAmount),
+                           SUM(COALESCE(ReturnAmount,0)), SUM(COALESCE(DiscountAmount,0)),
+                           SUM(COALESCE(TotalCost,0))
+                    FROM FactOnlineSales WHERE OnlineSalesKey > :wm
+                    GROUP BY DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0)
+                    ON DUPLICATE KEY UPDATE
+                        total_sales_quantity  = total_sales_quantity  + VALUES(total_sales_quantity),
+                        total_sales_amount    = total_sales_amount    + VALUES(total_sales_amount),
+                        total_return_amount   = total_return_amount   + VALUES(total_return_amount),
+                        total_discount_amount = total_discount_amount + VALUES(total_discount_amount),
+                        total_cost            = total_cost            + VALUES(total_cost)
+                """), {"wm": int(wm_online)})
+                conn.execute(text("""
+                    INSERT INTO _summary_watermarks (source_table, last_key) VALUES ('FactOnlineSales', :v)
+                    ON DUPLICATE KEY UPDATE last_key = :v
+                """), {"v": int(max_online)})
+
+        logger.info("post-ingest: summary_daily_sales updated in %.2fs", _t.perf_counter() - t0)
     except Exception as exc:
-        logger.warning("post-ingest fast-refresh failed: %s", exc)
+        logger.warning("post-ingest summary_daily_sales update failed: %s", exc)
+
+    _update_refresh_status(25, "Đang cập nhật bảng doanh số tổng hợp theo cửa hàng...")
+    # ── Step 2: Incremental agg_store_monthly_sales ─────────────
+    try:
+        if new_sales:
+            with engine.begin() as conn:
+                _upsert_agg_store_monthly_sales_from_factsales(conn, int(wm_sales))
+    except Exception as exc:
+        logger.warning("post-ingest agg_store_monthly_sales update failed: %s", exc)
+
+    # ── Step 3: Delta-update agg_kpi_summary ────────────────────
+    try:
+        if new_sales or new_online:
+            with engine.connect() as conn:
+                delta_sales = conn.execute(text("""
+                    SELECT COUNT(*) AS cnt, COALESCE(SUM(SalesAmount),0) AS amt,
+                           COALESCE(SUM(TotalCost),0) AS cost, COALESCE(SUM(SalesQuantity),0) AS qty
+                    FROM FactSales WHERE SalesKey > :wm
+                """), {"wm": int(wm_sales)}).mappings().first()
+                delta_online = conn.execute(text("""
+                    SELECT COUNT(*) AS cnt, COALESCE(SUM(SalesAmount),0) AS amt,
+                           COALESCE(SUM(TotalCost),0) AS cost, COALESCE(SUM(SalesQuantity),0) AS qty
+                    FROM FactOnlineSales WHERE OnlineSalesKey > :wm
+                """), {"wm": int(wm_online)}).mappings().first()
+                existing = {
+                    row["kpi_key"]: float(row["kpi_value"])
+                    for row in conn.execute(text(
+                        "SELECT kpi_key, kpi_value FROM agg_kpi_summary"
+                    )).mappings().all()
+                }
+            total_cnt  = int(delta_sales["cnt"])   + int(delta_online["cnt"])
+            total_amt  = float(delta_sales["amt"])  + float(delta_online["amt"])
+            total_cost = float(delta_sales["cost"]) + float(delta_online["cost"])
+            total_qty  = float(delta_sales["qty"])  + float(delta_online["qty"])
+            if total_cnt > 0:
+                new_cnt  = existing.get("total_transactions", 0) + total_cnt
+                new_amt  = existing.get("total_revenue", 0) + total_amt
+                prev_cost = (existing.get("total_revenue", 0)
+                             * (1 - existing.get("gross_margin", 0) / 100)
+                             if existing.get("total_revenue", 0) > 0 else 0)
+                new_cost = prev_cost + total_cost
+                new_qty  = (existing.get("avg_basket_size", 0)
+                            * existing.get("total_transactions", 1) + total_qty)
+                with engine.begin() as conn:
+                    conn.execute(text("""
+                        REPLACE INTO agg_kpi_summary
+                            (kpi_key, kpi_label, kpi_value, kpi_unit, period)
+                        VALUES
+                          ('total_revenue',        'Total Revenue',             :rev,    'USD',   'ALL'),
+                          ('total_transactions',   'Total Transactions',        :cnt,    'count', 'ALL'),
+                          ('avg_transaction_value','Average Transaction Value', :avg_rv, 'USD',   'ALL'),
+                          ('avg_basket_size',      'Average Basket Size',       :avg_bs, 'units', 'ALL'),
+                          ('gross_margin',         'Gross Profit Margin',       :margin, 'pct',   'ALL')
+                    """), {
+                        "rev":    new_amt,
+                        "cnt":    new_cnt,
+                        "avg_rv": new_amt / new_cnt if new_cnt else 0,
+                        "avg_bs": new_qty / new_cnt if new_cnt else 0,
+                        "margin": (new_amt - new_cost) / new_amt * 100 if new_amt else 0,
+                    })
+        logger.info("post-ingest: agg_kpi_summary updated in %.2fs", _t.perf_counter() - t0)
+    except Exception as exc:
+        logger.warning("post-ingest agg_kpi_summary update failed: %s", exc)
+
+    # ── Step 4: Clear all in-memory caches ──────────────────────
+    _update_refresh_status(40, "Đang cập nhật bảng KPI tổng hợp...")
+    try:
+        from modules.sale_profit.service import clear_all_caches as _sp_clear
+        _sp_clear()
+    except Exception:
+        pass
+    try:
+        from modules.employee_performance.service import clear_all_caches as _ep_clear
+        _ep_clear()
+    except Exception:
+        pass
+    try:
+        from modules.data_management.analytics import clear_all_caches as _an_clear
+        _an_clear()
+    except Exception:
+        pass
+
+    _update_refresh_status(55, "Đang xây dựng lại cache dữ liệu trong nền...")
+    logger.info("post-ingest sync refresh done in %.2fs (DW ready, bg rebuild started)", _t.perf_counter() - t0)
+
+    # ── Background: parquet rebuild + heavy incremental agg updates ─
+    def _heavy_bg():
+        # 5. Rebuild sale_profit parquet from updated summary_daily_sales
+        _update_refresh_status(60, "Đang xây dựng lại cache Doanh thu & Lợi nhuận...")
+        try:
+            from modules.sale_profit.service import refresh_sales_profit_cache
+            refresh_sales_profit_cache()
+            logger.info("post-ingest bg: sale_profit parquet rebuilt")
+        except Exception as _e:
+            logger.warning("post-ingest bg parquet rebuild failed: %s", _e)
+        # 6. Incremental update of all agg tables via ETL watermarks (never full rebuild)
+        _update_refresh_status(72, "Đang cập nhật bảng tổng hợp tồn kho & sản phẩm...")
+        try:
+            from migrations.etl_pipeline import run_etl
+            run_etl()
+            logger.info("post-ingest bg: ETL incremental complete")
+        except Exception as _e:
+            logger.warning("post-ingest bg ETL failed: %s", _e)
+        # 7. Refresh item_trends customer segments from updated agg_customer_rfm
+        _update_refresh_status(84, "Đang cập nhật cache phân khúc khách hàng...")
+        try:
+            from modules.item_trends.service import build_customer_segments_cache
+            build_customer_segments_cache(force_refresh=True)
+        except Exception as _e:
+            logger.warning("post-ingest bg item_trends cache failed: %s", _e)
+        # 8. Rebuild demand forecasting parquet cache (daily_sales_snapshot + abc_xyz)
+        _update_refresh_status(90, "Đang xây dựng lại cache dự báo nhu cầu (có thể mất vài phút)...")
+        try:
+            from modules.demand_forecasting.data.data_loader import ensure_parquet_cache
+            ensure_parquet_cache(force_refresh=True)
+            logger.info("post-ingest bg: demand forecasting parquet rebuilt")
+        except Exception as _e:
+            logger.warning("post-ingest bg demand forecasting cache failed: %s", _e)
+        # 9. Trigger realtime SSE snapshot refresh
+        try:
+            from modules.realtime.router import _poll_dw_once
+            _poll_dw_once()
+        except Exception as _e:
+            logger.warning("post-ingest bg realtime poll failed: %s", _e)
+        # Clear analytics cache AFTER all agg tables rebuilt
+        try:
+            from modules.data_management.analytics import clear_all_caches as _an_clear2
+            _an_clear2()
+        except Exception:
+            pass
+        # Signal frontend via SSE that all charts data is now fresh
+        try:
+            from modules.realtime.router import notify_charts_refreshed
+            notify_charts_refreshed()
+        except Exception as _e:
+            logger.warning("post-ingest bg: notify_charts_refreshed failed: %s", _e)
+        _update_refresh_status(100, "Cập nhật hoàn tất — tất cả dữ liệu đã được làm mới.", running=False)
+
+    threading.Thread(target=_heavy_bg, daemon=True).start()
+
+
+@router.get("/ingest-refresh-status")
+def ingest_refresh_status():
+    """Return the current progress of the post-ingest background refresh.
+    Poll this endpoint after a successful /csv-transform-load call
+    to display a live progress bar on the frontend.
+    """
+    with _INGEST_STATUS_LOCK:
+        return dict(_INGEST_REFRESH_STATUS)
 
 
 @router.get("/categories/{table_name}")
@@ -887,7 +1236,7 @@ async def csv_transform_load(
         except Exception as exc:
             logger.error(f"[csv-transform-load] DIM upsert error for {target_table}: {exc}")
             raise HTTPException(status_code=400, detail=f"Bảng '{target_table}': {_parse_db_error(exc)}")
-        threading.Thread(target=_post_ingest_refresh, daemon=True).start()
+        _post_ingest_sync()
         return serialize_payload({
             "status": "success",
             "target_table": target_table,
@@ -907,7 +1256,7 @@ async def csv_transform_load(
             detail=f"Bảng '{target_table}': {_parse_db_error(exc)}"
         )
 
-    threading.Thread(target=_post_ingest_refresh, daemon=True).start()
+    _post_ingest_sync()
     return serialize_payload({
         "status": "success",
         "target_table": target_table,

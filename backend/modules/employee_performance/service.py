@@ -118,11 +118,20 @@ def _manager_monthly_subquery(where_clause: str) -> str:
         asm.month_number AS month,
         asm.total_sales_amount,
         COALESCE(smc.total_return_amount, 0) AS total_return_amount,
-        asm.total_sales_amount - COALESCE(smc.total_return_amount, 0) AS net_sales,
+        asm.total_sales_amount
+            - COALESCE(smc.total_return_amount, 0)
+            - COALESCE(asm.total_discount_amount, 0) AS net_sales,
         COALESCE(smc.total_cost, 0) AS total_cost,
-        CASE WHEN asm.total_sales_amount > 0
-             THEN (asm.total_sales_amount - COALESCE(smc.total_cost, 0))
-                  / asm.total_sales_amount * 100
+        CASE WHEN (asm.total_sales_amount
+                   - COALESCE(smc.total_return_amount, 0)
+                   - COALESCE(asm.total_discount_amount, 0)) > 0
+             THEN (asm.total_sales_amount
+                   - COALESCE(smc.total_return_amount, 0)
+                   - COALESCE(asm.total_discount_amount, 0)
+                   - COALESCE(smc.total_cost, 0))
+                  / (asm.total_sales_amount
+                     - COALESCE(smc.total_return_amount, 0)
+                     - COALESCE(asm.total_discount_amount, 0)) * 100
              ELSE 0
         END AS profit_margin,
         asm.total_sales_quantity,
@@ -134,7 +143,9 @@ def _manager_monthly_subquery(where_clause: str) -> str:
         END AS return_rate,
         asm.order_count,
         CASE WHEN asm.order_count > 0
-             THEN asm.total_sales_amount / asm.order_count
+             THEN (asm.total_sales_amount
+                   - COALESCE(smc.total_return_amount, 0)
+                   - COALESCE(asm.total_discount_amount, 0)) / asm.order_count
              ELSE 0
         END AS avg_ticket_size
     FROM agg_store_monthly_sales asm

@@ -379,6 +379,8 @@ def _run_aggregate_tables(force: bool = False):
 
         if new_sales or force or not _table_has_data(conn, "agg_product_performance"):
             conn.execute(text("DELETE FROM agg_product_performance"))
+            # Use summary_daily_sales (pre-aggregated) instead of v_total_sales
+            # to avoid a full UNION ALL scan of FactSales + FactOnlineSales.
             conn.execute(text("""
                 INSERT INTO agg_product_performance
                     (product_key, product_name, brand_name, category_name, subcategory_name,
@@ -399,10 +401,12 @@ def _run_aggregate_tables(force: bool = False):
                         / SUM(agg.total_revenue) OVER ()
                 FROM (
                     SELECT ProductKey,
-                           SUM(SalesAmount)   AS total_revenue,
-                           SUM(SalesQuantity) AS total_quantity,
-                           SUM(TotalCost)     AS total_cost
-                    FROM v_total_sales
+                           SUM(total_sales_amount
+                               - COALESCE(total_return_amount,   0)
+                               - COALESCE(total_discount_amount, 0)) AS total_revenue,
+                           SUM(total_sales_quantity)                  AS total_quantity,
+                           SUM(COALESCE(total_cost, 0))               AS total_cost
+                    FROM summary_daily_sales
                     GROUP BY ProductKey
                 ) agg
                 JOIN DimProduct p ON p.ProductKey = agg.ProductKey
@@ -500,31 +504,32 @@ def _run_aggregate_tables(force: bool = False):
         """))
 
         if new_sales or new_online or force or not _table_has_data(conn, "agg_kpi_summary"):
-            # Use REPLACE INTO (upsert by kpi_key PK) — never DELETE first so stale
-            # data is preserved if any individual query below fails (e.g. lock timeout).
+            # Use REPLACE INTO (upsert by kpi_key PK) — always rebuild from v_total_sales so
+            # values are always the authoritative all-time totals. The incremental delta approach
+            # caused double-counting when _post_ingest_sync() already updated the table.
             conn.execute(text("DROP TABLE IF EXISTS _tmp_kpi_agg"))
             conn.execute(text("""
                 CREATE TABLE _tmp_kpi_agg AS
-                SELECT COUNT(*)           AS cnt,
-                       SUM(SalesAmount)   AS sum_amt,
-                       SUM(TotalCost)     AS sum_cost,
-                       AVG(SalesAmount)   AS avg_amt,
-                       AVG(SalesQuantity) AS avg_qty
+                SELECT COUNT(*)                                                            AS cnt,
+                       SUM(SalesAmount - COALESCE(ReturnAmount,0) - COALESCE(DiscountAmount,0)) AS sum_net,
+                       SUM(TotalCost)                                                     AS sum_cost,
+                       AVG(SalesAmount - COALESCE(ReturnAmount,0) - COALESCE(DiscountAmount,0)) AS avg_net,
+                       AVG(SalesQuantity)                                                 AS avg_qty
                 FROM v_total_sales
             """))
             logger.info("_tmp_kpi_agg created (single scan of v_total_sales)")
             conn.execute(text("""
                 REPLACE INTO agg_kpi_summary (kpi_key, kpi_label, kpi_value, kpi_unit, period)
-                SELECT 'total_revenue','Total Revenue',sum_amt,'USD','ALL' FROM _tmp_kpi_agg
+                SELECT 'total_revenue','Total Revenue',sum_net,'USD','ALL' FROM _tmp_kpi_agg
                 UNION ALL
                 SELECT 'total_transactions','Total Transactions',cnt,'count','ALL' FROM _tmp_kpi_agg
                 UNION ALL
-                SELECT 'avg_transaction_value','Average Transaction Value',avg_amt,'USD','ALL' FROM _tmp_kpi_agg
+                SELECT 'avg_transaction_value','Average Transaction Value',avg_net,'USD','ALL' FROM _tmp_kpi_agg
                 UNION ALL
                 SELECT 'avg_basket_size','Average Basket Size',avg_qty,'units','ALL' FROM _tmp_kpi_agg
                 UNION ALL
                 SELECT 'gross_margin','Gross Profit Margin',
-                       CASE WHEN sum_amt>0 THEN (sum_amt-sum_cost)/sum_amt*100 ELSE 0 END,
+                       CASE WHEN sum_net>0 THEN (sum_net-sum_cost)/sum_net*100 ELSE 0 END,
                        'pct','ALL'
                 FROM _tmp_kpi_agg
             """))
@@ -618,26 +623,65 @@ def _run_aggregate_tables(force: bool = False):
         """))
 
         if new_sales or new_online or force or not _table_has_data(conn, "agg_channel_summary"):
-            conn.execute(text("DELETE FROM agg_channel_summary"))
-            conn.execute(text("""
-                INSERT INTO agg_channel_summary (channel, revenue, profit, transactions)
-                SELECT 'Offline',
-                       SUM(s.total_sales_amount),
-                       SUM(s.total_sales_amount) - SUM(s.total_sales_quantity * p.UnitCost),
-                       SUM(s.total_sales_quantity)
-                FROM summary_daily_sales s
-                LEFT JOIN DimProduct p ON p.ProductKey = s.ProductKey
-            """))
-            conn.execute(text("""
-                INSERT INTO agg_channel_summary (channel, revenue, profit, transactions)
-                SELECT 'Online',
-                       SUM(o.SalesAmount),
-                       SUM(o.SalesAmount) - SUM(o.SalesQuantity * p.UnitCost),
-                       SUM(o.SalesQuantity)
-                FROM FactOnlineSales o
-                LEFT JOIN DimProduct p ON p.ProductKey = o.ProductKey
-            """))
-            logger.info("agg_channel_summary rebuilt")
+            if force or not _table_has_data(conn, "agg_channel_summary"):
+                # First run / forced rebuild: full scan of fact tables.
+                conn.execute(text("DELETE FROM agg_channel_summary"))
+                conn.execute(text("""
+                    INSERT INTO agg_channel_summary (channel, revenue, profit, transactions)
+                    SELECT 'Offline',
+                           SUM(SalesAmount - COALESCE(ReturnAmount,0) - COALESCE(DiscountAmount,0)),
+                           SUM(SalesAmount - COALESCE(ReturnAmount,0) - COALESCE(DiscountAmount,0))
+                               - SUM(COALESCE(TotalCost,0)),
+                           COUNT(*)
+                    FROM FactSales
+                """))
+                conn.execute(text("""
+                    INSERT INTO agg_channel_summary (channel, revenue, profit, transactions)
+                    SELECT 'Online',
+                           SUM(SalesAmount - COALESCE(ReturnAmount,0) - COALESCE(DiscountAmount,0)),
+                           SUM(SalesAmount - COALESCE(ReturnAmount,0) - COALESCE(DiscountAmount,0))
+                               - SUM(COALESCE(TotalCost,0)),
+                           COUNT(DISTINCT SalesOrderNumber)
+                    FROM FactOnlineSales
+                """))
+                logger.info("agg_channel_summary built (full)")
+            else:
+                # Incremental: delta from new rows only — avoids full table scans.
+                if new_sales:
+                    conn.execute(text(f"""
+                        INSERT INTO agg_channel_summary (channel, revenue, profit, transactions)
+                        SELECT 'Offline',
+                               COALESCE(SUM(SalesAmount - COALESCE(ReturnAmount,0)
+                                            - COALESCE(DiscountAmount,0)), 0),
+                               COALESCE(SUM(SalesAmount - COALESCE(ReturnAmount,0)
+                                            - COALESCE(DiscountAmount,0)), 0)
+                                   - COALESCE(SUM(COALESCE(TotalCost,0)), 0),
+                               COUNT(*)
+                        FROM FactSales
+                        WHERE SalesKey > {int(sales_wm)}
+                        ON DUPLICATE KEY UPDATE
+                            revenue      = revenue      + VALUES(revenue),
+                            profit       = profit       + VALUES(profit),
+                            transactions = transactions + VALUES(transactions)
+                    """))
+                if new_online:
+                    conn.execute(text(f"""
+                        INSERT INTO agg_channel_summary (channel, revenue, profit, transactions)
+                        SELECT 'Online',
+                               COALESCE(SUM(SalesAmount - COALESCE(ReturnAmount,0)
+                                            - COALESCE(DiscountAmount,0)), 0),
+                               COALESCE(SUM(SalesAmount - COALESCE(ReturnAmount,0)
+                                            - COALESCE(DiscountAmount,0)), 0)
+                                   - COALESCE(SUM(COALESCE(TotalCost,0)), 0),
+                               COUNT(DISTINCT SalesOrderNumber)
+                        FROM FactOnlineSales
+                        WHERE OnlineSalesKey > {int(online_wm)}
+                        ON DUPLICATE KEY UPDATE
+                            revenue      = revenue      + VALUES(revenue),
+                            profit       = profit       + VALUES(profit),
+                            transactions = transactions + VALUES(transactions)
+                    """))
+                logger.info("agg_channel_summary updated incrementally")
         else:
             logger.info("agg_channel_summary: no new data, skipping")
 
