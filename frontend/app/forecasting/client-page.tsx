@@ -77,13 +77,6 @@ type ReadyResponse = {
 export default function ForecastingClient() {
   const { refreshTick } = useRefresh();
   const [horizonDays, setHorizonDays] = useState(14);
-  const [horizonMode, setHorizonMode] = useState<"preset" | "custom">("preset");
-  const [customStartDate, setCustomStartDate] = useState<string>(() => new Date().toISOString().split("T")[0]);
-  const [customEndDate, setCustomEndDate] = useState<string>(() => {
-    const d = new Date();
-    d.setDate(d.getDate() + 14);
-    return d.toISOString().split("T")[0];
-  });
   const [productSearch, setProductSearch] = useState<string>("");
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
@@ -221,12 +214,6 @@ export default function ForecastingClient() {
   );
 
   const HORIZON_PRESETS = [7, 14, 30, 60, 90];
-
-  const handleCustomDateChange = (start: string, end: string) => {
-    if (!start || !end) return;
-    const days = Math.max(1, Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000));
-    setHorizonDays(Math.min(days, 90));
-  };
 
   const filteredBulkRows = useMemo(
     () =>
@@ -446,9 +433,9 @@ export default function ForecastingClient() {
               {HORIZON_PRESETS.map((d) => (
                 <button
                   key={d}
-                  onClick={() => { setHorizonDays(d); setHorizonMode("preset"); }}
+                  onClick={() => setHorizonDays(d)}
                   className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
-                    horizonMode === "preset" && horizonDays === d
+                    horizonDays === d
                       ? "bg-indigo-600 text-white border-indigo-600"
                       : "bg-white text-slate-700 border-slate-300 hover:border-indigo-400 hover:text-indigo-600"
                   }`}
@@ -456,47 +443,7 @@ export default function ForecastingClient() {
                   {d} ngày
                 </button>
               ))}
-              <button
-                onClick={() => setHorizonMode("custom")}
-                className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
-                  horizonMode === "custom"
-                    ? "bg-indigo-600 text-white border-indigo-600"
-                    : "bg-white text-slate-700 border-slate-300 hover:border-indigo-400 hover:text-indigo-600"
-                }`}
-              >
-                Tùy chỉnh
-              </button>
             </div>
-            {horizonMode === "custom" && (
-              <div className="flex gap-2 mt-2 items-center flex-wrap">
-                <div className="flex items-center gap-1 text-xs text-slate-500">
-                  <span>Từ</span>
-                  <input
-                    type="date"
-                    value={customStartDate}
-                    className="border rounded-lg p-1.5 text-sm"
-                    onChange={(e) => {
-                      setCustomStartDate(e.target.value);
-                      handleCustomDateChange(e.target.value, customEndDate);
-                    }}
-                  />
-                </div>
-                <div className="flex items-center gap-1 text-xs text-slate-500">
-                  <span>Đến</span>
-                  <input
-                    type="date"
-                    value={customEndDate}
-                    min={customStartDate}
-                    className="border rounded-lg p-1.5 text-sm"
-                    onChange={(e) => {
-                      setCustomEndDate(e.target.value);
-                      handleCustomDateChange(customStartDate, e.target.value);
-                    }}
-                  />
-                </div>
-                <span className="text-xs text-indigo-600 font-medium">→ {horizonDays} ngày</span>
-              </div>
-            )}
           </div>
 
           {selectedSku ? (
