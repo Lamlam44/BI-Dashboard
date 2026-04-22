@@ -77,6 +77,14 @@ type ReadyResponse = {
 export default function ForecastingClient() {
   const { refreshTick } = useRefresh();
   const [horizonDays, setHorizonDays] = useState(14);
+  const [horizonMode, setHorizonMode] = useState<"preset" | "custom">("preset");
+  const [customStartDate, setCustomStartDate] = useState<string>(() => new Date().toISOString().split("T")[0]);
+  const [customEndDate, setCustomEndDate] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 14);
+    return d.toISOString().split("T")[0];
+  });
+  const [productSearch, setProductSearch] = useState<string>("");
   const [overview, setOverview] = useState<OverviewResponse | null>(null);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [bulkRows, setBulkRows] = useState<BulkRow[]>([]);
@@ -194,6 +202,24 @@ export default function ForecastingClient() {
     [deepDiveData]
   );
 
+  const HORIZON_PRESETS = [7, 14, 30, 60, 90];
+
+  const handleCustomDateChange = (start: string, end: string) => {
+    if (!start || !end) return;
+    const days = Math.max(1, Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000));
+    setHorizonDays(Math.min(days, 90));
+  };
+
+  const filteredBulkRows = useMemo(
+    () =>
+      productSearch.trim()
+        ? bulkRows.filter((r) =>
+            r.product_name.toLowerCase().includes(productSearch.toLowerCase())
+          )
+        : bulkRows,
+    [bulkRows, productSearch]
+  );
+
   return (
     <DashboardLayout>
       <div className="space-y-8" ref={reportRef}>
@@ -231,7 +257,7 @@ export default function ForecastingClient() {
 
         {error && <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-lg">{error}</div>}
 
-        <Section title="📊 Tổng quan Dự báo" badge="Horizon: ${horizonDays} ngày">
+        <Section title="📊 Tổng quan Dự báo" badge={`Horizon: ${horizonDays} ngày`}>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="bg-white border rounded-xl p-4">
               <p className="text-xs text-slate-500">Tổng nhu cầu dự báo ({horizonDays} ngày)</p>
@@ -298,34 +324,98 @@ export default function ForecastingClient() {
         </Section>
 
         <Section title="🔍 Lọc & Thao tác hàng loạt" badge="🔗 Lọc theo ABC/XYZ">
-          <div className="flex flex-wrap gap-3 items-end">
+          <div className="flex flex-wrap gap-4 items-end">
+            {/* ABC Filter */}
             <div>
-              <label className="block text-xs text-slate-500 mb-1">ABC</label>
-              <select className="border rounded p-2" value={abcFilter} onChange={(e) => setAbcFilter(e.target.value)}>
-                <option value="ALL">ALL</option>
-                <option value="A">A</option>
-                <option value="B">B</option>
-                <option value="C">C</option>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Phân loại ABC</label>
+              <select className="border rounded-lg p-2 text-sm" value={abcFilter} onChange={(e) => setAbcFilter(e.target.value)}>
+                <option value="ALL">Tất cả</option>
+                <option value="A">A — Doanh thu cao (80%)</option>
+                <option value="B">B — Doanh thu vừa (15%)</option>
+                <option value="C">C — Doanh thu thấp (5%)</option>
               </select>
             </div>
+
+            {/* XYZ Filter */}
             <div>
-              <label className="block text-xs text-slate-500 mb-1">XYZ</label>
-              <select className="border rounded p-2" value={xyzFilter} onChange={(e) => setXyzFilter(e.target.value)}>
-                <option value="ALL">ALL</option>
-                <option value="X">X</option>
-                <option value="Y">Y</option>
-                <option value="Z">Z</option>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Phân loại XYZ</label>
+              <select className="border rounded-lg p-2 text-sm" value={xyzFilter} onChange={(e) => setXyzFilter(e.target.value)}>
+                <option value="ALL">Tất cả</option>
+                <option value="X">X — Nhu cầu ổn định (CV ≤ 0.5)</option>
+                <option value="Y">Y — Biến động vừa (CV ≤ 1.0)</option>
+                <option value="Z">Z — Biến động cao (CV &gt; 1.0)</option>
               </select>
             </div>
-            <div>
-              <label className="block text-xs text-slate-500 mb-1">Số ngày dự báo</label>
+
+            {/* Horizon Preset Buttons + Custom Date Range */}
+            <div className="flex-1 min-w-[320px]">
+              <label className="block text-xs font-medium text-slate-500 mb-1">Khoảng thời gian dự báo</label>
+              <div className="flex gap-1.5 flex-wrap">
+                {HORIZON_PRESETS.map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => { setHorizonDays(d); setHorizonMode("preset"); }}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+                      horizonMode === "preset" && horizonDays === d
+                        ? "bg-indigo-600 text-white border-indigo-600"
+                        : "bg-white text-slate-700 border-slate-300 hover:border-indigo-400 hover:text-indigo-600"
+                    }`}
+                  >
+                    {d} ngày
+                  </button>
+                ))}
+                <button
+                  onClick={() => setHorizonMode("custom")}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+                    horizonMode === "custom"
+                      ? "bg-indigo-600 text-white border-indigo-600"
+                      : "bg-white text-slate-700 border-slate-300 hover:border-indigo-400 hover:text-indigo-600"
+                  }`}
+                >
+                  Tùy chỉnh
+                </button>
+              </div>
+              {horizonMode === "custom" && (
+                <div className="flex gap-2 mt-2 items-center flex-wrap">
+                  <div className="flex items-center gap-1 text-xs text-slate-500">
+                    <span>Từ</span>
+                    <input
+                      type="date"
+                      value={customStartDate}
+                      className="border rounded-lg p-1.5 text-sm"
+                      onChange={(e) => {
+                        setCustomStartDate(e.target.value);
+                        handleCustomDateChange(e.target.value, customEndDate);
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center gap-1 text-xs text-slate-500">
+                    <span>Đến</span>
+                    <input
+                      type="date"
+                      value={customEndDate}
+                      min={customStartDate}
+                      className="border rounded-lg p-1.5 text-sm"
+                      onChange={(e) => {
+                        setCustomEndDate(e.target.value);
+                        handleCustomDateChange(customStartDate, e.target.value);
+                      }}
+                    />
+                  </div>
+                  <span className="text-xs text-indigo-600 font-medium">→ {horizonDays} ngày</span>
+                </div>
+              )}
+            </div>
+
+            {/* Product Name Search */}
+            <div className="flex-1 min-w-[200px]">
+              <label className="block text-xs font-medium text-slate-500 mb-1">Tìm kiếm sản phẩm</label>
               <input
-                type="number"
-                value={horizonDays}
-                min={1}
-                max={60}
-                className="border rounded p-2 w-24"
-                onChange={(e) => setHorizonDays(Number(e.target.value))}
+                type="text"
+                placeholder="Nhập tên sản phẩm..."
+                value={productSearch}
+                onChange={(e) => setProductSearch(e.target.value)}
+                className="border rounded-lg p-2 text-sm w-full"
               />
             </div>
           </div>
@@ -348,7 +438,7 @@ export default function ForecastingClient() {
               </p>
             </div>
           </div>
-          <p className="text-sm text-slate-600">Số SKU khớp: <b>{bulkRows.length}</b></p>
+          <p className="text-sm text-slate-600">Số SKU khớp: <b>{filteredBulkRows.length}</b>{productSearch && <span className="text-slate-400 ml-1">(lọc từ {bulkRows.length} SKU)</span>}</p>
 
           <div className="overflow-auto max-h-80 border rounded-lg">
             <table className="min-w-full text-sm">
@@ -363,8 +453,8 @@ export default function ForecastingClient() {
                 </tr>
               </thead>
               <tbody>
-                {bulkRows.slice(0, 50).map((r) => (
-                  <tr key={r.product_id} className="border-t">
+                {filteredBulkRows.slice(0, 50).map((r) => (
+                  <tr key={r.product_id} className="border-t hover:bg-slate-50 cursor-pointer" onClick={() => loadDeepDive(r.product_id, r.product_name)}>
                     <td className="p-2">{r.product_id}</td>
                     <td className="p-2">{r.product_name}</td>
                     <td className="p-2">{r.abc_class}/{r.xyz_class}</td>
@@ -372,15 +462,15 @@ export default function ForecastingClient() {
                     <td className="p-2">{r.cv.toFixed(3)}</td>
                     <td className="p-2">
                       <button
-                        className="px-2 py-1 bg-indigo-600 text-white rounded"
-                        onClick={() => loadDeepDive(r.product_id, r.product_name)}
+                        className="px-2 py-1 bg-indigo-600 text-white rounded text-xs"
+                        onClick={(e) => { e.stopPropagation(); loadDeepDive(r.product_id, r.product_name); }}
                       >
                         Xem chi tiết
                       </button>
                     </td>
                   </tr>
                 ))}
-                {bulkRows.length === 0 && (
+                {filteredBulkRows.length === 0 && (
                   <tr className="border-t">
                     <td className="p-3 text-slate-500" colSpan={6}>Không có SKU phù hợp với bộ lọc hiện tại.</td>
                   </tr>

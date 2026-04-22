@@ -428,7 +428,7 @@ async def train_model(product_id: int):
 
 
 @router.get("/forecast/{product_id}")
-async def forecast(product_id: int, days_ahead: int = Query(7, ge=1, le=30)):
+async def forecast(product_id: int, days_ahead: int = Query(14, ge=1, le=90)):
     """
     Get demand forecast for a specific product.
     
