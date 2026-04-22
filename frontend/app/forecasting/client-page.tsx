@@ -89,8 +89,10 @@ export default function ForecastingClient() {
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
   const [bulkRows, setBulkRows] = useState<BulkRow[]>([]);
   const [selectedSku, setSelectedSku] = useState<number | null>(null);
+  const [selectedSkuName, setSelectedSkuName] = useState<string>("");
   const [deepDiveData, setDeepDiveData] = useState<ForecastPoint[]>([]);
   const [deepDiveTitle, setDeepDiveTitle] = useState<string>("");
+  const [isLoadingDeepDive, setIsLoadingDeepDive] = useState(false);
 
   const [abcFilter, setAbcFilter] = useState<string>("A");
   const [xyzFilter, setXyzFilter] = useState<string>("ALL");
@@ -126,12 +128,20 @@ export default function ForecastingClient() {
   };
 
   const loadDeepDive = async (productId: number, productName: string) => {
-    const res = await fetchJsonWithTimeout(`${API_BASE}/forecast/${productId}?days_ahead=${horizonDays}`, 600000);
-    if (!res.ok) throw new Error("Không thể tải dự báo chi tiết");
-    const payload = await res.json();
-    setDeepDiveData(payload.forecast_points || []);
-    setDeepDiveTitle(`${productName} (SKU ${productId})`);
-    setSelectedSku(productId);
+    setIsLoadingDeepDive(true);
+    try {
+      const res = await fetchJsonWithTimeout(`${API_BASE}/forecast/${productId}?days_ahead=${horizonDays}`, 600000);
+      if (!res.ok) throw new Error("Không thể tải dự báo chi tiết");
+      const payload = await res.json();
+      setDeepDiveData(payload.forecast_points || []);
+      setDeepDiveTitle(`${productName} (SKU ${productId})`);
+      setSelectedSku(productId);
+      setSelectedSkuName(productName);
+    } catch (e: any) {
+      setError(e.message || "Lỗi không xác định");
+    } finally {
+      setIsLoadingDeepDive(false);
+    }
   };
 
   const refreshAllLayers = async () => {
@@ -171,6 +181,14 @@ export default function ForecastingClient() {
       .catch((e: any) => setError(e.message || "Lỗi không xác định"))
       .finally(() => setIsLoadingData(false));
   }, [horizonDays, refreshTick]);
+
+  // Re-fetch deep dive chart whenever horizonDays changes and a SKU is already selected
+  useEffect(() => {
+    if (selectedSku !== null && selectedSkuName) {
+      loadDeepDive(selectedSku, selectedSkuName);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [horizonDays]);
 
   useEffect(() => {
     const syncRecalculateState = async () => {
@@ -278,7 +296,7 @@ export default function ForecastingClient() {
           </div>
         </Section>
 
-        <Section title="🔥 Cảnh báo dị thường" badge="Sản phẩm loại A có biến động bất thường">
+        <Section title="🔥 Cảnh báo dị thường" badge="Sản phẩm loại A có biến động bất thường — so sánh TB 14 ngày vs TB 90 ngày gần nhất">
           <div className="overflow-auto max-h-72">
             <table className="min-w-full text-sm">
               <thead className="sticky top-0 bg-slate-50">
@@ -323,7 +341,7 @@ export default function ForecastingClient() {
           </div>
         </Section>
 
-        <Section title="🔍 Lọc & Thao tác hàng loạt" badge="🔗 Lọc theo ABC/XYZ">
+        <Section title="🔍 Lọc danh sách SKU" badge="Phân loại dựa trên toàn bộ lịch sử dữ liệu — ABC/XYZ không thay đổi theo khoảng dự báo">
           <div className="flex flex-wrap gap-4 items-end">
             {/* ABC Filter */}
             <div>
@@ -345,66 +363,6 @@ export default function ForecastingClient() {
                 <option value="Y">Y — Biến động vừa (CV ≤ 1.0)</option>
                 <option value="Z">Z — Biến động cao (CV &gt; 1.0)</option>
               </select>
-            </div>
-
-            {/* Horizon Preset Buttons + Custom Date Range */}
-            <div className="flex-1 min-w-[320px]">
-              <label className="block text-xs font-medium text-slate-500 mb-1">Khoảng thời gian dự báo</label>
-              <div className="flex gap-1.5 flex-wrap">
-                {HORIZON_PRESETS.map((d) => (
-                  <button
-                    key={d}
-                    onClick={() => { setHorizonDays(d); setHorizonMode("preset"); }}
-                    className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
-                      horizonMode === "preset" && horizonDays === d
-                        ? "bg-indigo-600 text-white border-indigo-600"
-                        : "bg-white text-slate-700 border-slate-300 hover:border-indigo-400 hover:text-indigo-600"
-                    }`}
-                  >
-                    {d} ngày
-                  </button>
-                ))}
-                <button
-                  onClick={() => setHorizonMode("custom")}
-                  className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
-                    horizonMode === "custom"
-                      ? "bg-indigo-600 text-white border-indigo-600"
-                      : "bg-white text-slate-700 border-slate-300 hover:border-indigo-400 hover:text-indigo-600"
-                  }`}
-                >
-                  Tùy chỉnh
-                </button>
-              </div>
-              {horizonMode === "custom" && (
-                <div className="flex gap-2 mt-2 items-center flex-wrap">
-                  <div className="flex items-center gap-1 text-xs text-slate-500">
-                    <span>Từ</span>
-                    <input
-                      type="date"
-                      value={customStartDate}
-                      className="border rounded-lg p-1.5 text-sm"
-                      onChange={(e) => {
-                        setCustomStartDate(e.target.value);
-                        handleCustomDateChange(e.target.value, customEndDate);
-                      }}
-                    />
-                  </div>
-                  <div className="flex items-center gap-1 text-xs text-slate-500">
-                    <span>Đến</span>
-                    <input
-                      type="date"
-                      value={customEndDate}
-                      min={customStartDate}
-                      className="border rounded-lg p-1.5 text-sm"
-                      onChange={(e) => {
-                        setCustomEndDate(e.target.value);
-                        handleCustomDateChange(customStartDate, e.target.value);
-                      }}
-                    />
-                  </div>
-                  <span className="text-xs text-indigo-600 font-medium">→ {horizonDays} ngày</span>
-                </div>
-              )}
             </div>
 
             {/* Product Name Search */}
@@ -480,10 +438,74 @@ export default function ForecastingClient() {
           </div>
         </Section>
 
-        <Section title="📈 Dự báo Chi tiết" badge="Chọn SKU ở trên để xem dự báo chi tiết">
+        <Section title="📈 Dự báo Chi tiết" badge="Chọn SKU ở trên — tùy chỉnh khoảng dự báo bên dưới">
+          {/* Horizon Picker — luôn hiển thị, ảnh hưởng biểu đồ dự báo */}
+          <div className="mb-4 p-3 bg-slate-50 border border-slate-200 rounded-lg">
+            <label className="block text-xs font-medium text-slate-600 mb-2">📅 Khoảng thời gian dự báo</label>
+            <div className="flex gap-1.5 flex-wrap">
+              {HORIZON_PRESETS.map((d) => (
+                <button
+                  key={d}
+                  onClick={() => { setHorizonDays(d); setHorizonMode("preset"); }}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+                    horizonMode === "preset" && horizonDays === d
+                      ? "bg-indigo-600 text-white border-indigo-600"
+                      : "bg-white text-slate-700 border-slate-300 hover:border-indigo-400 hover:text-indigo-600"
+                  }`}
+                >
+                  {d} ngày
+                </button>
+              ))}
+              <button
+                onClick={() => setHorizonMode("custom")}
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+                  horizonMode === "custom"
+                    ? "bg-indigo-600 text-white border-indigo-600"
+                    : "bg-white text-slate-700 border-slate-300 hover:border-indigo-400 hover:text-indigo-600"
+                }`}
+              >
+                Tùy chỉnh
+              </button>
+            </div>
+            {horizonMode === "custom" && (
+              <div className="flex gap-2 mt-2 items-center flex-wrap">
+                <div className="flex items-center gap-1 text-xs text-slate-500">
+                  <span>Từ</span>
+                  <input
+                    type="date"
+                    value={customStartDate}
+                    className="border rounded-lg p-1.5 text-sm"
+                    onChange={(e) => {
+                      setCustomStartDate(e.target.value);
+                      handleCustomDateChange(e.target.value, customEndDate);
+                    }}
+                  />
+                </div>
+                <div className="flex items-center gap-1 text-xs text-slate-500">
+                  <span>Đến</span>
+                  <input
+                    type="date"
+                    value={customEndDate}
+                    min={customStartDate}
+                    className="border rounded-lg p-1.5 text-sm"
+                    onChange={(e) => {
+                      setCustomEndDate(e.target.value);
+                      handleCustomDateChange(customStartDate, e.target.value);
+                    }}
+                  />
+                </div>
+                <span className="text-xs text-indigo-600 font-medium">→ {horizonDays} ngày</span>
+              </div>
+            )}
+          </div>
+
           {selectedSku ? (
             <>
-              <p className="text-sm text-slate-600 mb-4">{deepDiveTitle}</p>
+              <p className="text-sm text-slate-600 mb-1">{deepDiveTitle}</p>
+              <p className="text-xs text-slate-400 mb-4">Dự báo <span className="font-semibold text-indigo-600">{horizonDays} ngày</span> tiếp theo kể từ ngày dữ liệu cuối</p>
+              {isLoadingDeepDive ? (
+                <div className="flex items-center justify-center h-40 text-slate-400">Đang tải dự báo...</div>
+              ) : (
               <div style={{ width: "100%", height: 360 }}>
                 <ResponsiveContainer>
                   <ComposedChart data={chartData}>
@@ -497,6 +519,7 @@ export default function ForecastingClient() {
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
+              )}
             </>
           ) : (
             <div className="text-slate-500">Chọn một SKU từ danh sách bên trên để xem dự báo chi tiết.</div>
