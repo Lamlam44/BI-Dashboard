@@ -28,7 +28,7 @@ DW_USER = os.getenv("DB_USER", "3FhVda33nHpaura.root")
 DW_PASSWORD = os.getenv("DB_PASSWORD", "8KbTcgZ9LmZOBIrI")
 DW_DATABASE = os.getenv("DB_NAME", "retails_dataset")
 # Cấu hình SSL (Bắt buộc cho TiDB Cloud Serverless)
-DW_SSL_CA = os.getenv("SSL_CA_PATH", "/etc/ssl/certs/ca-certificates.crt")
+DW_SSL_CA = os.getenv("SSL_CA_PATH", "/opt/render/project/src/backend/isrgrootx1.pem")
 
 # ── API Server ─────────────────────────────────────────────────
 API_HOST = os.getenv("API_HOST", "0.0.0.0")
