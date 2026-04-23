@@ -743,7 +743,15 @@ def _post_ingest_sync() -> None:
       3. Delta-update agg_kpi_summary (no full v_total_sales scan).
       4. Clear all in-memory TTL caches (sale_profit, employee_perf, analytics).
 
-    Background (non-blocking, uses existing agg tables — NEVER rebuilds from raw):
+    All work runs in a background daemon thread so the HTTP response is never
+    delayed. Progress is tracked via _INGEST_REFRESH_STATUS and polled by
+    the frontend via GET /data/ingest-refresh-status.
+
+    Steps (all in background):
+      1. Incrementally update summary_daily_sales from new DW rows (watermarked).
+      2. Incrementally update agg_store_monthly_sales.
+      3. Delta-update agg_kpi_summary (no full v_total_sales scan).
+      4. Clear all in-memory TTL caches.
       5. Rebuild sale_profit parquet cache from summary_daily_sales.
       6. Incremental update agg_inventory_metrics, agg_product_performance,
          agg_customer_rfm, agg_store_monthly_costs, agg_channel_summary via
@@ -752,176 +760,176 @@ def _post_ingest_sync() -> None:
       8. Rebuild demand forecasting parquet cache (daily_sales_snapshot + abc_xyz).
       9. Trigger realtime SSE snapshot refresh.
     """
-    import time as _t
-    t0 = _t.perf_counter()
-
     _update_refresh_status(0, "Bắt đầu cập nhật sau khi nạp dữ liệu...")
 
-    engine = get_engine()
-    new_sales  = False
-    new_online = False
-    wm_sales   = 0
-    wm_online  = 0
+    def _heavy_bg() -> None:  # noqa: C901
+        import time as _t
+        t0 = _t.perf_counter()
+        engine = get_engine()
+        new_sales = False
+        new_online = False
+        wm_sales: int = 0
+        wm_online: int = 0
 
-    # ── Step 1: Incremental summary_daily_sales ─────────────────
-    try:
-        with engine.begin() as conn:
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS _summary_watermarks (
-                    source_table VARCHAR(64) PRIMARY KEY,
-                    last_key BIGINT NOT NULL DEFAULT 0
-                ) ENGINE=InnoDB
-            """))
-            wm_sales = conn.execute(text(
-                "SELECT COALESCE((SELECT last_key FROM _summary_watermarks WHERE source_table='FactSales'),0)"
-            )).scalar() or 0
-            wm_online = conn.execute(text(
-                "SELECT COALESCE((SELECT last_key FROM _summary_watermarks WHERE source_table='FactOnlineSales'),0)"
-            )).scalar() or 0
-            max_sales  = conn.execute(text("SELECT COALESCE(MAX(SalesKey),0) FROM FactSales")).scalar() or 0
-            max_online = conn.execute(text("SELECT COALESCE(MAX(OnlineSalesKey),0) FROM FactOnlineSales")).scalar() or 0
-
-            new_sales  = int(max_sales)  > int(wm_sales)
-            new_online = int(max_online) > int(wm_online)
-
-            if new_sales:
-                conn.execute(text("""
-                    INSERT INTO summary_daily_sales
-                        (DateKey, StoreKey, ProductKey, PromotionKey,
-                         total_sales_quantity, total_sales_amount,
-                         total_return_amount, total_discount_amount, total_cost)
-                    SELECT DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0),
-                           SUM(SalesQuantity), SUM(SalesAmount),
-                           SUM(COALESCE(ReturnAmount,0)), SUM(COALESCE(DiscountAmount,0)),
-                           SUM(COALESCE(TotalCost,0))
-                    FROM FactSales WHERE SalesKey > :wm
-                    GROUP BY DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0)
-                    ON DUPLICATE KEY UPDATE
-                        total_sales_quantity  = total_sales_quantity  + VALUES(total_sales_quantity),
-                        total_sales_amount    = total_sales_amount    + VALUES(total_sales_amount),
-                        total_return_amount   = total_return_amount   + VALUES(total_return_amount),
-                        total_discount_amount = total_discount_amount + VALUES(total_discount_amount),
-                        total_cost            = total_cost            + VALUES(total_cost)
-                """), {"wm": int(wm_sales)})
-                conn.execute(text("""
-                    INSERT INTO _summary_watermarks (source_table, last_key) VALUES ('FactSales', :v)
-                    ON DUPLICATE KEY UPDATE last_key = :v
-                """), {"v": int(max_sales)})
-
-            if new_online:
-                conn.execute(text("""
-                    INSERT INTO summary_daily_sales
-                        (DateKey, StoreKey, ProductKey, PromotionKey,
-                         total_sales_quantity, total_sales_amount,
-                         total_return_amount, total_discount_amount, total_cost)
-                    SELECT DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0),
-                           SUM(SalesQuantity), SUM(SalesAmount),
-                           SUM(COALESCE(ReturnAmount,0)), SUM(COALESCE(DiscountAmount,0)),
-                           SUM(COALESCE(TotalCost,0))
-                    FROM FactOnlineSales WHERE OnlineSalesKey > :wm
-                    GROUP BY DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0)
-                    ON DUPLICATE KEY UPDATE
-                        total_sales_quantity  = total_sales_quantity  + VALUES(total_sales_quantity),
-                        total_sales_amount    = total_sales_amount    + VALUES(total_sales_amount),
-                        total_return_amount   = total_return_amount   + VALUES(total_return_amount),
-                        total_discount_amount = total_discount_amount + VALUES(total_discount_amount),
-                        total_cost            = total_cost            + VALUES(total_cost)
-                """), {"wm": int(wm_online)})
-                conn.execute(text("""
-                    INSERT INTO _summary_watermarks (source_table, last_key) VALUES ('FactOnlineSales', :v)
-                    ON DUPLICATE KEY UPDATE last_key = :v
-                """), {"v": int(max_online)})
-
-        logger.info("post-ingest: summary_daily_sales updated in %.2fs", _t.perf_counter() - t0)
-    except Exception as exc:
-        logger.warning("post-ingest summary_daily_sales update failed: %s", exc)
-
-    _update_refresh_status(25, "Đang cập nhật bảng doanh số tổng hợp theo cửa hàng...")
-    # ── Step 2: Incremental agg_store_monthly_sales ─────────────
-    try:
-        if new_sales:
+        # ── Step 1: Incremental summary_daily_sales ─────────────
+        _update_refresh_status(10, "Đang cập nhật bảng doanh số ngày...")
+        try:
             with engine.begin() as conn:
-                _upsert_agg_store_monthly_sales_from_factsales(conn, int(wm_sales))
-    except Exception as exc:
-        logger.warning("post-ingest agg_store_monthly_sales update failed: %s", exc)
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS _summary_watermarks (
+                        source_table VARCHAR(64) PRIMARY KEY,
+                        last_key BIGINT NOT NULL DEFAULT 0
+                    ) ENGINE=InnoDB
+                """))
+                wm_sales = conn.execute(text(
+                    "SELECT COALESCE((SELECT last_key FROM _summary_watermarks WHERE source_table='FactSales'),0)"
+                )).scalar() or 0
+                wm_online = conn.execute(text(
+                    "SELECT COALESCE((SELECT last_key FROM _summary_watermarks WHERE source_table='FactOnlineSales'),0)"
+                )).scalar() or 0
+                max_sales  = conn.execute(text("SELECT COALESCE(MAX(SalesKey),0) FROM FactSales")).scalar() or 0
+                max_online = conn.execute(text("SELECT COALESCE(MAX(OnlineSalesKey),0) FROM FactOnlineSales")).scalar() or 0
 
-    # ── Step 3: Delta-update agg_kpi_summary ────────────────────
-    try:
-        if new_sales or new_online:
-            with engine.connect() as conn:
-                delta_sales = conn.execute(text("""
-                    SELECT COUNT(*) AS cnt, COALESCE(SUM(SalesAmount),0) AS amt,
-                           COALESCE(SUM(TotalCost),0) AS cost, COALESCE(SUM(SalesQuantity),0) AS qty
-                    FROM FactSales WHERE SalesKey > :wm
-                """), {"wm": int(wm_sales)}).mappings().first()
-                delta_online = conn.execute(text("""
-                    SELECT COUNT(*) AS cnt, COALESCE(SUM(SalesAmount),0) AS amt,
-                           COALESCE(SUM(TotalCost),0) AS cost, COALESCE(SUM(SalesQuantity),0) AS qty
-                    FROM FactOnlineSales WHERE OnlineSalesKey > :wm
-                """), {"wm": int(wm_online)}).mappings().first()
-                existing = {
-                    row["kpi_key"]: float(row["kpi_value"])
-                    for row in conn.execute(text(
-                        "SELECT kpi_key, kpi_value FROM agg_kpi_summary"
-                    )).mappings().all()
-                }
-            total_cnt  = int(delta_sales["cnt"])   + int(delta_online["cnt"])
-            total_amt  = float(delta_sales["amt"])  + float(delta_online["amt"])
-            total_cost = float(delta_sales["cost"]) + float(delta_online["cost"])
-            total_qty  = float(delta_sales["qty"])  + float(delta_online["qty"])
-            if total_cnt > 0:
-                new_cnt  = existing.get("total_transactions", 0) + total_cnt
-                new_amt  = existing.get("total_revenue", 0) + total_amt
-                prev_cost = (existing.get("total_revenue", 0)
-                             * (1 - existing.get("gross_margin", 0) / 100)
-                             if existing.get("total_revenue", 0) > 0 else 0)
-                new_cost = prev_cost + total_cost
-                new_qty  = (existing.get("avg_basket_size", 0)
-                            * existing.get("total_transactions", 1) + total_qty)
-                with engine.begin() as conn:
+                new_sales  = int(max_sales)  > int(wm_sales)
+                new_online = int(max_online) > int(wm_online)
+
+                if new_sales:
                     conn.execute(text("""
-                        REPLACE INTO agg_kpi_summary
-                            (kpi_key, kpi_label, kpi_value, kpi_unit, period)
-                        VALUES
-                          ('total_revenue',        'Total Revenue',             :rev,    'USD',   'ALL'),
-                          ('total_transactions',   'Total Transactions',        :cnt,    'count', 'ALL'),
-                          ('avg_transaction_value','Average Transaction Value', :avg_rv, 'USD',   'ALL'),
-                          ('avg_basket_size',      'Average Basket Size',       :avg_bs, 'units', 'ALL'),
-                          ('gross_margin',         'Gross Profit Margin',       :margin, 'pct',   'ALL')
-                    """), {
-                        "rev":    new_amt,
-                        "cnt":    new_cnt,
-                        "avg_rv": new_amt / new_cnt if new_cnt else 0,
-                        "avg_bs": new_qty / new_cnt if new_cnt else 0,
-                        "margin": (new_amt - new_cost) / new_amt * 100 if new_amt else 0,
-                    })
-        logger.info("post-ingest: agg_kpi_summary updated in %.2fs", _t.perf_counter() - t0)
-    except Exception as exc:
-        logger.warning("post-ingest agg_kpi_summary update failed: %s", exc)
+                        INSERT INTO summary_daily_sales
+                            (DateKey, StoreKey, ProductKey, PromotionKey,
+                             total_sales_quantity, total_sales_amount,
+                             total_return_amount, total_discount_amount, total_cost)
+                        SELECT DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0),
+                               SUM(SalesQuantity), SUM(SalesAmount),
+                               SUM(COALESCE(ReturnAmount,0)), SUM(COALESCE(DiscountAmount,0)),
+                               SUM(COALESCE(TotalCost,0))
+                        FROM FactSales WHERE SalesKey > :wm
+                        GROUP BY DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0)
+                        ON DUPLICATE KEY UPDATE
+                            total_sales_quantity  = total_sales_quantity  + VALUES(total_sales_quantity),
+                            total_sales_amount    = total_sales_amount    + VALUES(total_sales_amount),
+                            total_return_amount   = total_return_amount   + VALUES(total_return_amount),
+                            total_discount_amount = total_discount_amount + VALUES(total_discount_amount),
+                            total_cost            = total_cost            + VALUES(total_cost)
+                    """), {"wm": int(wm_sales)})
+                    conn.execute(text("""
+                        INSERT INTO _summary_watermarks (source_table, last_key) VALUES ('FactSales', :v)
+                        ON DUPLICATE KEY UPDATE last_key = :v
+                    """), {"v": int(max_sales)})
 
-    # ── Step 4: Clear all in-memory caches ──────────────────────
-    _update_refresh_status(40, "Đang cập nhật bảng KPI tổng hợp...")
-    try:
-        from modules.sale_profit.service import clear_all_caches as _sp_clear
-        _sp_clear()
-    except Exception:
-        pass
-    try:
-        from modules.employee_performance.service import clear_all_caches as _ep_clear
-        _ep_clear()
-    except Exception:
-        pass
-    try:
-        from modules.data_management.analytics import clear_all_caches as _an_clear
-        _an_clear()
-    except Exception:
-        pass
+                if new_online:
+                    conn.execute(text("""
+                        INSERT INTO summary_daily_sales
+                            (DateKey, StoreKey, ProductKey, PromotionKey,
+                             total_sales_quantity, total_sales_amount,
+                             total_return_amount, total_discount_amount, total_cost)
+                        SELECT DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0),
+                               SUM(SalesQuantity), SUM(SalesAmount),
+                               SUM(COALESCE(ReturnAmount,0)), SUM(COALESCE(DiscountAmount,0)),
+                               SUM(COALESCE(TotalCost,0))
+                        FROM FactOnlineSales WHERE OnlineSalesKey > :wm
+                        GROUP BY DATE(DateKey), COALESCE(StoreKey,0), ProductKey, COALESCE(PromotionKey,0)
+                        ON DUPLICATE KEY UPDATE
+                            total_sales_quantity  = total_sales_quantity  + VALUES(total_sales_quantity),
+                            total_sales_amount    = total_sales_amount    + VALUES(total_sales_amount),
+                            total_return_amount   = total_return_amount   + VALUES(total_return_amount),
+                            total_discount_amount = total_discount_amount + VALUES(total_discount_amount),
+                            total_cost            = total_cost            + VALUES(total_cost)
+                    """), {"wm": int(wm_online)})
+                    conn.execute(text("""
+                        INSERT INTO _summary_watermarks (source_table, last_key) VALUES ('FactOnlineSales', :v)
+                        ON DUPLICATE KEY UPDATE last_key = :v
+                    """), {"v": int(max_online)})
 
-    _update_refresh_status(55, "Đang xây dựng lại cache dữ liệu trong nền...")
-    logger.info("post-ingest sync refresh done in %.2fs (DW ready, bg rebuild started)", _t.perf_counter() - t0)
+            logger.info("post-ingest bg: summary_daily_sales updated in %.2fs", _t.perf_counter() - t0)
+        except Exception as exc:
+            logger.warning("post-ingest bg summary_daily_sales update failed: %s", exc)
 
-    # ── Background: parquet rebuild + heavy incremental agg updates ─
-    def _heavy_bg():
+        _update_refresh_status(25, "Đang cập nhật bảng doanh số tổng hợp theo cửa hàng...")
+        # ── Step 2: Incremental agg_store_monthly_sales ─────────
+        try:
+            if new_sales:
+                with engine.begin() as conn:
+                    _upsert_agg_store_monthly_sales_from_factsales(conn, int(wm_sales))
+        except Exception as exc:
+            logger.warning("post-ingest bg agg_store_monthly_sales update failed: %s", exc)
+
+        # ── Step 3: Delta-update agg_kpi_summary ────────────────
+        _update_refresh_status(35, "Đang cập nhật bảng KPI tổng hợp...")
+        try:
+            if new_sales or new_online:
+                with engine.connect() as conn:
+                    delta_sales = conn.execute(text("""
+                        SELECT COUNT(*) AS cnt, COALESCE(SUM(SalesAmount),0) AS amt,
+                               COALESCE(SUM(TotalCost),0) AS cost, COALESCE(SUM(SalesQuantity),0) AS qty
+                        FROM FactSales WHERE SalesKey > :wm
+                    """), {"wm": int(wm_sales)}).mappings().first()
+                    delta_online = conn.execute(text("""
+                        SELECT COUNT(*) AS cnt, COALESCE(SUM(SalesAmount),0) AS amt,
+                               COALESCE(SUM(TotalCost),0) AS cost, COALESCE(SUM(SalesQuantity),0) AS qty
+                        FROM FactOnlineSales WHERE OnlineSalesKey > :wm
+                    """), {"wm": int(wm_online)}).mappings().first()
+                    existing = {
+                        row["kpi_key"]: float(row["kpi_value"])
+                        for row in conn.execute(text(
+                            "SELECT kpi_key, kpi_value FROM agg_kpi_summary"
+                        )).mappings().all()
+                    }
+                total_cnt  = int(delta_sales["cnt"])   + int(delta_online["cnt"])
+                total_amt  = float(delta_sales["amt"])  + float(delta_online["amt"])
+                total_cost = float(delta_sales["cost"]) + float(delta_online["cost"])
+                total_qty  = float(delta_sales["qty"])  + float(delta_online["qty"])
+                if total_cnt > 0:
+                    new_cnt  = existing.get("total_transactions", 0) + total_cnt
+                    new_amt  = existing.get("total_revenue", 0) + total_amt
+                    prev_cost = (existing.get("total_revenue", 0)
+                                 * (1 - existing.get("gross_margin", 0) / 100)
+                                 if existing.get("total_revenue", 0) > 0 else 0)
+                    new_cost = prev_cost + total_cost
+                    new_qty  = (existing.get("avg_basket_size", 0)
+                                * existing.get("total_transactions", 1) + total_qty)
+                    with engine.begin() as conn:
+                        conn.execute(text("""
+                            REPLACE INTO agg_kpi_summary
+                                (kpi_key, kpi_label, kpi_value, kpi_unit, period)
+                            VALUES
+                              ('total_revenue',        'Total Revenue',             :rev,    'USD',   'ALL'),
+                              ('total_transactions',   'Total Transactions',        :cnt,    'count', 'ALL'),
+                              ('avg_transaction_value','Average Transaction Value', :avg_rv, 'USD',   'ALL'),
+                              ('avg_basket_size',      'Average Basket Size',       :avg_bs, 'units', 'ALL'),
+                              ('gross_margin',         'Gross Profit Margin',       :margin, 'pct',   'ALL')
+                        """), {
+                            "rev":    new_amt,
+                            "cnt":    new_cnt,
+                            "avg_rv": new_amt / new_cnt if new_cnt else 0,
+                            "avg_bs": new_qty / new_cnt if new_cnt else 0,
+                            "margin": (new_amt - new_cost) / new_amt * 100 if new_amt else 0,
+                        })
+            logger.info("post-ingest bg: agg_kpi_summary updated in %.2fs", _t.perf_counter() - t0)
+        except Exception as exc:
+            logger.warning("post-ingest bg agg_kpi_summary update failed: %s", exc)
+
+        # ── Step 4: Clear all in-memory caches ──────────────────
+        _update_refresh_status(45, "Đang xóa cache bộ nhớ...")
+        try:
+            from modules.sale_profit.service import clear_all_caches as _sp_clear
+            _sp_clear()
+        except Exception:
+            pass
+        try:
+            from modules.employee_performance.service import clear_all_caches as _ep_clear
+            _ep_clear()
+        except Exception:
+            pass
+        try:
+            from modules.data_management.analytics import clear_all_caches as _an_clear
+            _an_clear()
+        except Exception:
+            pass
+
+        logger.info("post-ingest bg: sync steps done in %.2fs, continuing heavy tasks", _t.perf_counter() - t0)
+
+        _update_refresh_status(55, "Đang xây dựng lại cache dữ liệu trong nền...")
         # 5. Rebuild sale_profit parquet from updated summary_daily_sales
         _update_refresh_status(60, "Đang xây dựng lại cache Doanh thu & Lợi nhuận...")
         try:

@@ -378,50 +378,123 @@ def _run_aggregate_tables(force: bool = False):
         """))
 
         if new_sales or force or not _table_has_data(conn, "agg_product_performance"):
-            conn.execute(text("DELETE FROM agg_product_performance"))
-            # Use summary_daily_sales (pre-aggregated) instead of v_total_sales
-            # to avoid a full UNION ALL scan of FactSales + FactOnlineSales.
+            is_full_pp = force or not _table_has_data(conn, "agg_product_performance")
+            if is_full_pp:
+                # First run or forced: full rebuild from summary_daily_sales
+                conn.execute(text("DELETE FROM agg_product_performance"))
+                conn.execute(text("""
+                    INSERT INTO agg_product_performance
+                        (product_key, product_name, brand_name, category_name, subcategory_name,
+                         total_revenue, total_quantity, total_cost, gross_profit, profit_margin,
+                         revenue_rank, abc_class, cumulative_pct)
+                    SELECT
+                        p.ProductKey, p.ProductName, p.BrandName,
+                        COALESCE(pc.ProductCategoryName, ''),
+                        COALESCE(psc.ProductSubcategoryName, ''),
+                        COALESCE(agg.total_revenue, 0), COALESCE(agg.total_quantity, 0),
+                        COALESCE(agg.total_cost, 0),
+                        COALESCE(agg.total_revenue, 0) - COALESCE(agg.total_cost, 0),
+                        CASE WHEN COALESCE(agg.total_revenue, 0) > 0
+                             THEN (COALESCE(agg.total_revenue, 0) - COALESCE(agg.total_cost, 0))
+                                  / COALESCE(agg.total_revenue, 0)
+                             ELSE 0 END,
+                        0, 'C', 0
+                    FROM (
+                        SELECT ProductKey,
+                               SUM(total_sales_amount
+                                   - COALESCE(total_return_amount,   0)
+                                   - COALESCE(total_discount_amount, 0)) AS total_revenue,
+                               SUM(total_sales_quantity)                  AS total_quantity,
+                               SUM(COALESCE(total_cost, 0))               AS total_cost
+                        FROM summary_daily_sales
+                        GROUP BY ProductKey
+                    ) agg
+                    JOIN DimProduct p ON p.ProductKey = agg.ProductKey
+                    LEFT JOIN DimProductSubcategory psc
+                      ON psc.ProductSubcategoryKey = p.ProductSubcategoryKey
+                    LEFT JOIN DimProductCategory pc
+                      ON pc.ProductCategoryKey = psc.ProductCategoryKey
+                """))
+                logger.info("agg_product_performance rebuilt (full)")
+            else:
+                # Incremental: UPSERT only products that have new sales rows.
+                # Recalculate their totals from summary_daily_sales (full history
+                # for those products only, NOT a full table scan).
+                conn.execute(text(f"""
+                    INSERT INTO agg_product_performance
+                        (product_key, product_name, brand_name, category_name, subcategory_name,
+                         total_revenue, total_quantity, total_cost, gross_profit, profit_margin,
+                         revenue_rank, abc_class, cumulative_pct)
+                    SELECT
+                        p.ProductKey, p.ProductName, p.BrandName,
+                        COALESCE(pc.ProductCategoryName, ''),
+                        COALESCE(psc.ProductSubcategoryName, ''),
+                        COALESCE(agg.total_revenue, 0), COALESCE(agg.total_quantity, 0),
+                        COALESCE(agg.total_cost, 0),
+                        COALESCE(agg.total_revenue, 0) - COALESCE(agg.total_cost, 0),
+                        CASE WHEN COALESCE(agg.total_revenue, 0) > 0
+                             THEN (COALESCE(agg.total_revenue, 0) - COALESCE(agg.total_cost, 0))
+                                  / COALESCE(agg.total_revenue, 0)
+                             ELSE 0 END,
+                        0, 'C', 0
+                    FROM (
+                        SELECT sds.ProductKey,
+                               SUM(sds.total_sales_amount
+                                   - COALESCE(sds.total_return_amount,   0)
+                                   - COALESCE(sds.total_discount_amount, 0)) AS total_revenue,
+                               SUM(sds.total_sales_quantity)                  AS total_quantity,
+                               SUM(COALESCE(sds.total_cost, 0))               AS total_cost
+                        FROM summary_daily_sales sds
+                        WHERE sds.ProductKey IN (
+                            SELECT DISTINCT ProductKey FROM FactSales
+                            WHERE SalesKey > {int(sales_wm)}
+                            UNION
+                            SELECT DISTINCT ProductKey FROM FactOnlineSales
+                            WHERE OnlineSalesKey > {int(online_wm)}
+                        )
+                        GROUP BY sds.ProductKey
+                    ) agg
+                    JOIN DimProduct p ON p.ProductKey = agg.ProductKey
+                    LEFT JOIN DimProductSubcategory psc
+                      ON psc.ProductSubcategoryKey = p.ProductSubcategoryKey
+                    LEFT JOIN DimProductCategory pc
+                      ON pc.ProductCategoryKey = psc.ProductCategoryKey
+                    ON DUPLICATE KEY UPDATE
+                        product_name     = VALUES(product_name),
+                        brand_name       = VALUES(brand_name),
+                        category_name    = VALUES(category_name),
+                        subcategory_name = VALUES(subcategory_name),
+                        total_revenue    = VALUES(total_revenue),
+                        total_quantity   = VALUES(total_quantity),
+                        total_cost       = VALUES(total_cost),
+                        gross_profit     = VALUES(gross_profit),
+                        profit_margin    = VALUES(profit_margin)
+                """))
+                logger.info("agg_product_performance: incremental UPSERT done (affected products only)")
+
+            # Always recalculate revenue_rank, cumulative_pct, abc_class
+            # from the aggregate table itself — never scans raw fact tables.
+            conn.execute(text("DROP TABLE IF EXISTS _tmp_pp_rank"))
             conn.execute(text("""
-                INSERT INTO agg_product_performance
-                    (product_key, product_name, brand_name, category_name, subcategory_name,
-                     total_revenue, total_quantity, total_cost, gross_profit, profit_margin,
-                     revenue_rank, abc_class, cumulative_pct)
-                SELECT
-                    p.ProductKey, p.ProductName, p.BrandName,
-                    COALESCE(pc.ProductCategoryName, ''),
-                    COALESCE(psc.ProductSubcategoryName, ''),
-                    agg.total_revenue, agg.total_quantity, agg.total_cost,
-                    agg.total_revenue - agg.total_cost,
-                    CASE WHEN agg.total_revenue > 0
-                         THEN (agg.total_revenue - agg.total_cost) / agg.total_revenue
-                         ELSE 0 END,
-                    RANK() OVER (ORDER BY agg.total_revenue DESC),
-                    'C',
-                    SUM(agg.total_revenue) OVER (ORDER BY agg.total_revenue DESC)
-                        / SUM(agg.total_revenue) OVER ()
-                FROM (
-                    SELECT ProductKey,
-                           SUM(total_sales_amount
-                               - COALESCE(total_return_amount,   0)
-                               - COALESCE(total_discount_amount, 0)) AS total_revenue,
-                           SUM(total_sales_quantity)                  AS total_quantity,
-                           SUM(COALESCE(total_cost, 0))               AS total_cost
-                    FROM summary_daily_sales
-                    GROUP BY ProductKey
-                ) agg
-                JOIN DimProduct p ON p.ProductKey = agg.ProductKey
-                LEFT JOIN DimProductSubcategory psc
-                  ON psc.ProductSubcategoryKey = p.ProductSubcategoryKey
-                LEFT JOIN DimProductCategory pc
-                  ON pc.ProductCategoryKey = psc.ProductCategoryKey
+                CREATE TABLE _tmp_pp_rank AS
+                SELECT product_key,
+                       RANK() OVER (ORDER BY total_revenue DESC) AS rk,
+                       SUM(total_revenue) OVER (ORDER BY total_revenue DESC)
+                           / NULLIF(SUM(total_revenue) OVER (), 0) AS cum_pct
+                FROM agg_product_performance
             """))
             conn.execute(text("""
-                UPDATE agg_product_performance SET abc_class =
-                    CASE WHEN cumulative_pct <= 0.80 THEN 'A'
-                         WHEN cumulative_pct <= 0.95 THEN 'B'
-                         ELSE 'C' END
+                UPDATE agg_product_performance p
+                JOIN _tmp_pp_rank r ON r.product_key = p.product_key
+                SET p.revenue_rank   = r.rk,
+                    p.cumulative_pct = r.cum_pct,
+                    p.abc_class      = CASE
+                        WHEN r.cum_pct <= 0.80 THEN 'A'
+                        WHEN r.cum_pct <= 0.95 THEN 'B'
+                        ELSE 'C' END
             """))
-            logger.info("agg_product_performance rebuilt")
+            conn.execute(text("DROP TABLE IF EXISTS _tmp_pp_rank"))
+            logger.info("agg_product_performance: re-ranked from aggregate table")
         else:
             logger.info("agg_product_performance: no new sales, skipping")
 
@@ -445,45 +518,105 @@ def _run_aggregate_tables(force: bool = False):
         """))
 
         if new_online or force or not _table_has_data(conn, "agg_customer_rfm"):
-            conn.execute(text("DELETE FROM agg_customer_rfm"))
-            conn.execute(text("""
-                INSERT INTO agg_customer_rfm
-                    (customer_key, last_order_date, recency_days, frequency, monetary,
-                     r_score, f_score, m_score, rfm_segment)
-                SELECT
-                    base.CustomerKey, base.last_order_date, base.recency_days,
-                    base.frequency, base.monetary,
-                    base.r_score, base.f_score, base.m_score,
-                    CASE
-                        WHEN r_score >= 4 AND f_score >= 4 AND m_score >= 4 THEN 'Champion'
-                        WHEN r_score >= 3 AND f_score >= 3 AND m_score >= 3 THEN 'Loyal'
-                        WHEN r_score >= 4 AND f_score <= 2                  THEN 'New Customer'
-                        WHEN r_score <= 2 AND f_score >= 3 AND m_score >= 3 THEN 'At Risk'
-                        WHEN r_score <= 2 AND f_score <= 2                  THEN 'Lost'
-                        WHEN r_score >= 3 AND m_score >= 3                  THEN 'Potential Loyalist'
-                        ELSE 'Need Attention'
-                    END AS rfm_segment
-                FROM (
-                    SELECT rfm.*,
-                        NTILE(5) OVER (ORDER BY recency_days ASC)  AS r_score,
-                        NTILE(5) OVER (ORDER BY frequency ASC)     AS f_score,
-                        NTILE(5) OVER (ORDER BY monetary ASC)      AS m_score
+            is_full_rfm = force or not _table_has_data(conn, "agg_customer_rfm")
+            if is_full_rfm:
+                # First run or forced: full rebuild from FactOnlineSales
+                conn.execute(text("DELETE FROM agg_customer_rfm"))
+                conn.execute(text("""
+                    INSERT INTO agg_customer_rfm
+                        (customer_key, last_order_date, recency_days, frequency, monetary,
+                         r_score, f_score, m_score, rfm_segment)
+                    SELECT
+                        base.CustomerKey, base.last_order_date, base.recency_days,
+                        base.frequency, base.monetary,
+                        base.r_score, base.f_score, base.m_score,
+                        CASE
+                            WHEN r_score >= 4 AND f_score >= 4 AND m_score >= 4 THEN 'Champion'
+                            WHEN r_score >= 3 AND f_score >= 3 AND m_score >= 3 THEN 'Loyal'
+                            WHEN r_score >= 4 AND f_score <= 2                  THEN 'New Customer'
+                            WHEN r_score <= 2 AND f_score >= 3 AND m_score >= 3 THEN 'At Risk'
+                            WHEN r_score <= 2 AND f_score <= 2                  THEN 'Lost'
+                            WHEN r_score >= 3 AND m_score >= 3                  THEN 'Potential Loyalist'
+                            ELSE 'Need Attention'
+                        END AS rfm_segment
                     FROM (
-                        SELECT CustomerKey,
-                            MAX(DATE(DateKey)) AS last_order_date,
-                            DATEDIFF(
-                                (SELECT MAX(DATE(DateKey)) FROM FactOnlineSales),
-                                MAX(DATE(DateKey))
-                            ) AS recency_days,
-                            COUNT(DISTINCT SalesOrderNumber) AS frequency,
-                            SUM(SalesAmount) AS monetary
-                        FROM FactOnlineSales
-                        WHERE CustomerKey IS NOT NULL
-                        GROUP BY CustomerKey
-                    ) rfm
-                ) base
+                        SELECT rfm.*,
+                            NTILE(5) OVER (ORDER BY recency_days ASC)  AS r_score,
+                            NTILE(5) OVER (ORDER BY frequency ASC)     AS f_score,
+                            NTILE(5) OVER (ORDER BY monetary ASC)      AS m_score
+                        FROM (
+                            SELECT CustomerKey,
+                                MAX(DATE(DateKey)) AS last_order_date,
+                                DATEDIFF(
+                                    (SELECT MAX(DATE(DateKey)) FROM FactOnlineSales),
+                                    MAX(DATE(DateKey))
+                                ) AS recency_days,
+                                COUNT(DISTINCT SalesOrderNumber) AS frequency,
+                                SUM(SalesAmount) AS monetary
+                            FROM FactOnlineSales
+                            WHERE CustomerKey IS NOT NULL
+                            GROUP BY CustomerKey
+                        ) rfm
+                    ) base
+                """))
+                logger.info("agg_customer_rfm rebuilt (full)")
+            else:
+                # Incremental: only scan NEW FactOnlineSales rows (since watermark).
+                # Accumulate frequency/monetary, keep latest last_order_date.
+                conn.execute(text(f"""
+                    INSERT INTO agg_customer_rfm
+                        (customer_key, last_order_date, recency_days, frequency, monetary,
+                         r_score, f_score, m_score, rfm_segment)
+                    SELECT CustomerKey, MAX(DATE(DateKey)), 0,
+                           COUNT(DISTINCT SalesOrderNumber), SUM(SalesAmount),
+                           1, 1, 1, 'Unknown'
+                    FROM FactOnlineSales
+                    WHERE OnlineSalesKey > {int(online_wm)} AND CustomerKey IS NOT NULL
+                    GROUP BY CustomerKey
+                    ON DUPLICATE KEY UPDATE
+                        last_order_date = GREATEST(VALUES(last_order_date), last_order_date),
+                        frequency       = frequency + VALUES(frequency),
+                        monetary        = monetary  + VALUES(monetary)
+                """))
+                logger.info("agg_customer_rfm: incremental UPSERT done (new orders only)")
+
+            # Phase 2: update recency_days for ALL customers from stored last_order_date
+            # (no FactOnlineSales scan — computed from the aggregate table itself)
+            conn.execute(text("""
+                UPDATE agg_customer_rfm
+                SET recency_days = DATEDIFF(
+                    (SELECT mx FROM (SELECT MAX(last_order_date) AS mx FROM agg_customer_rfm) t),
+                    last_order_date
+                )
             """))
-            logger.info("agg_customer_rfm rebuilt")
+            # Phase 3: re-score NTILE from aggregate table — no FactOnlineSales scan needed
+            conn.execute(text("DROP TABLE IF EXISTS _tmp_rfm_scores"))
+            conn.execute(text("""
+                CREATE TABLE _tmp_rfm_scores AS
+                SELECT customer_key,
+                       NTILE(5) OVER (ORDER BY recency_days ASC)  AS r_score,
+                       NTILE(5) OVER (ORDER BY frequency    ASC)  AS f_score,
+                       NTILE(5) OVER (ORDER BY monetary     ASC)  AS m_score
+                FROM agg_customer_rfm
+            """))
+            conn.execute(text("""
+                UPDATE agg_customer_rfm cr
+                JOIN _tmp_rfm_scores s ON s.customer_key = cr.customer_key
+                SET cr.r_score     = s.r_score,
+                    cr.f_score     = s.f_score,
+                    cr.m_score     = s.m_score,
+                    cr.rfm_segment = CASE
+                        WHEN s.r_score >= 4 AND s.f_score >= 4 AND s.m_score >= 4 THEN 'Champion'
+                        WHEN s.r_score >= 3 AND s.f_score >= 3 AND s.m_score >= 3 THEN 'Loyal'
+                        WHEN s.r_score >= 4 AND s.f_score <= 2                    THEN 'New Customer'
+                        WHEN s.r_score <= 2 AND s.f_score >= 3 AND s.m_score >= 3 THEN 'At Risk'
+                        WHEN s.r_score <= 2 AND s.f_score <= 2                    THEN 'Lost'
+                        WHEN s.r_score >= 3 AND s.m_score >= 3                    THEN 'Potential Loyalist'
+                        ELSE 'Need Attention'
+                    END
+            """))
+            conn.execute(text("DROP TABLE IF EXISTS _tmp_rfm_scores"))
+            logger.info("agg_customer_rfm: re-scored NTILE from aggregate table")
         else:
             logger.info("agg_customer_rfm: no new online sales, skipping")
 

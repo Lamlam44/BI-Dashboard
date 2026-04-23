@@ -12,23 +12,23 @@ FRONTEND_DIR = PROJECT_ROOT.parent / "frontend"
 
 
 # ── BI Data Warehouse (LOCAL MySQL) ────────────────────────────
-# [LOCAL - COMMENTED OUT] Kết nối MySQL local
-# DW_HOST = os.getenv("DB_HOST", "127.0.0.1")
-# DW_PORT = int(os.getenv("DB_PORT", "3306"))
-# DW_USER = os.getenv("DB_USER", "root")
-# DW_PASSWORD = os.getenv("DB_PASSWORD", "12345")
-# DW_DATABASE = os.getenv("DB_NAME", "retails_dataset")
-# # [LOCAL] Không dùng SSL cho MySQL local
-# DW_SSL_CA = os.getenv("SSL_CA_PATH", "")
-
-# [CLOUD] TiDB Cloud / Render setup
-DW_HOST = os.getenv("DB_HOST", "gateway01.ap-southeast-1.prod.aws.tidbcloud.com")
-DW_PORT = int(os.getenv("DB_PORT", "4000"))  # TiDB Cloud sử dụng port 4000
-DW_USER = os.getenv("DB_USER", "3FhVda33nHpaura.root")
-DW_PASSWORD = os.getenv("DB_PASSWORD", "8KbTcgZ9LmZOBIrI")
+# [LOCAL] Kết nối MySQL local
+DW_HOST = os.getenv("DB_HOST", "127.0.0.1")
+DW_PORT = int(os.getenv("DB_PORT", "3306"))
+DW_USER = os.getenv("DB_USER", "root")
+DW_PASSWORD = os.getenv("DB_PASSWORD", "12345")
 DW_DATABASE = os.getenv("DB_NAME", "retails_dataset")
-# Cấu hình SSL (Bắt buộc cho TiDB Cloud Serverless)
-DW_SSL_CA = os.getenv("SSL_CA_PATH", "/opt/render/project/src/backend/isrgrootx1.pem")
+# [LOCAL] Không dùng SSL cho MySQL local
+DW_SSL_CA = os.getenv("SSL_CA_PATH", "")
+
+# [CLOUD - COMMENTED OUT] TiDB Cloud / Render setup
+# DW_HOST = os.getenv("DB_HOST", "gateway01.ap-southeast-1.prod.aws.tidbcloud.com")
+# DW_PORT = int(os.getenv("DB_PORT", "4000"))  # TiDB Cloud sử dụng port 4000
+# DW_USER = os.getenv("DB_USER", "3FhVda33nHpaura.root")
+# DW_PASSWORD = os.getenv("DB_PASSWORD", "8KbTcgZ9LmZOBIrI")
+# DW_DATABASE = os.getenv("DB_NAME", "retails_dataset")
+# # Cấu hình SSL (Bắt buộc cho TiDB Cloud Serverless)
+# DW_SSL_CA = os.getenv("SSL_CA_PATH", "/opt/render/project/src/backend/isrgrootx1.pem")
 
 # ── API Server ─────────────────────────────────────────────────
 API_HOST = os.getenv("API_HOST", "0.0.0.0")
